@@ -181,6 +181,29 @@ pub(crate) fn decode_storage_pixels(
     storage: StorageFormat,
     output: PixelFormat,
 ) -> Result<Vec<u8>> {
+    let output_len = decoded_pixel_len(width, height, output)?;
+    let mut decoded = vec![0; output_len];
+    decode_storage_pixels_into(input, width, height, storage, output, &mut decoded)?;
+    Ok(decoded)
+}
+
+pub(crate) fn decoded_pixel_len(width: u32, height: u32, output: PixelFormat) -> Result<usize> {
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "pixel count overflow"))?;
+    pixel_count
+        .checked_mul(output.bytes_per_pixel())
+        .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "decoded pixel size overflow"))
+}
+
+pub(crate) fn decode_storage_pixels_into(
+    input: &[u8],
+    width: u32,
+    height: u32,
+    storage: StorageFormat,
+    output: PixelFormat,
+    decoded: &mut [u8],
+) -> Result<usize> {
     let pixel_count = (width as usize)
         .checked_mul(height as usize)
         .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "pixel count overflow"))?;
@@ -193,9 +216,18 @@ pub(crate) fn decode_storage_pixels(
             format!("pixel data has {} bytes; expected {expected}", input.len()),
         ));
     }
-
-    let mut decoded = Vec::with_capacity(pixel_count * output.bytes_per_pixel());
-    for pixel in input.chunks_exact(storage.bytes_per_pixel()) {
+    let output_len = decoded_pixel_len(width, height, output)?;
+    if decoded.len() < output_len {
+        return Err(Error::new(
+            ErrorKind::OutputBufferTooSmall,
+            format!(
+                "output buffer has {} bytes; {output_len} required",
+                decoded.len()
+            ),
+        ));
+    }
+    let output_bpp = output.bytes_per_pixel();
+    for (pixel_index, pixel) in input.chunks_exact(storage.bytes_per_pixel()).enumerate() {
         let (red, green, blue, alpha) = match storage {
             StorageFormat::Rgb565 | StorageFormat::Argb565 => {
                 let packed = u16::from_le_bytes([pixel[0], pixel[1]]);
@@ -212,10 +244,11 @@ pub(crate) fn decode_storage_pixels(
             StorageFormat::Rgb888 => (pixel[2], pixel[1], pixel[0], 255),
             StorageFormat::Argb888 => (pixel[2], pixel[1], pixel[0], pixel[3]),
         };
-        decoded.extend_from_slice(&[red, green, blue]);
+        let output_index = pixel_index * output_bpp;
+        decoded[output_index..output_index + 3].copy_from_slice(&[red, green, blue]);
         if output == PixelFormat::Rgba8 {
-            decoded.push(alpha);
+            decoded[output_index + 3] = alpha;
         }
     }
-    Ok(decoded)
+    Ok(output_len)
 }

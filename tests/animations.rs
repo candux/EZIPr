@@ -208,3 +208,36 @@ fn malformed_offsets_return_errors_without_panicking() {
         assert!(Decoder::new(&data).is_err());
     }
 }
+
+#[test]
+fn composes_frames_into_reusable_caller_buffers() {
+    let decoder = Decoder::new(ANIMATION).unwrap();
+    let mut compositor = decoder.compositor(PixelFormat::Rgba8).unwrap();
+    assert_eq!(compositor.output_format(), PixelFormat::Rgba8);
+    assert_eq!(compositor.output_buffer_size().unwrap(), 8 * 6 * 4);
+
+    let mut too_small = vec![0; 8 * 6 * 4 - 1];
+    let error = compositor.next_frame_into(&mut too_small).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutputBufferTooSmall);
+    assert_eq!(compositor.next_index(), 0);
+
+    let mut destination = vec![0; 8 * 6 * 4];
+    assert_eq!(
+        compositor.next_frame_into(&mut destination).unwrap(),
+        Some(8 * 6 * 4)
+    );
+    assert_eq!(&destination[..4], &[255, 0, 0, 255]);
+    assert_eq!(compositor.next_index(), 1);
+
+    let expected = decoder
+        .decode_composited_frame(2, PixelFormat::Rgb8)
+        .unwrap();
+    let mut random = vec![0; 8 * 6 * 3];
+    assert_eq!(
+        decoder
+            .decode_composited_frame_into(2, PixelFormat::Rgb8, &mut random)
+            .unwrap(),
+        random.len()
+    );
+    assert_eq!(random, expected.pixels());
+}

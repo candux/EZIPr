@@ -782,6 +782,18 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
         self.next_index
     }
 
+    pub const fn output_format(&self) -> PixelFormat {
+        self.output
+    }
+
+    pub fn output_buffer_size(&self) -> Result<usize> {
+        crate::pixels::decoded_pixel_len(
+            self.decoder.info().width(),
+            self.decoder.info().height(),
+            self.output,
+        )
+    }
+
     pub fn reset(&mut self) {
         self.canvas.fill(0);
         self.next_index = 0;
@@ -793,6 +805,36 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
         if self.next_index >= self.decoder.info().frame_count() {
             return Ok(None);
         }
+        let mut pixels = vec![0; self.output_buffer_size()?];
+        self.next_frame_into(&mut pixels)?;
+        Ok(Some(DecodedImage::new(
+            self.decoder.info().width(),
+            self.decoder.info().height(),
+            self.output,
+            pixels,
+        )))
+    }
+
+    /// Compose the next frame into a caller-owned tightly packed buffer.
+    pub fn next_frame_into(&mut self, destination: &mut [u8]) -> Result<Option<usize>> {
+        if self.next_index >= self.decoder.info().frame_count() {
+            return Ok(None);
+        }
+        let required = self.output_buffer_size()?;
+        if destination.len() < required {
+            return Err(Error::new(
+                ErrorKind::OutputBufferTooSmall,
+                format!(
+                    "output buffer has {} bytes; {required} required",
+                    destination.len()
+                ),
+            ));
+        }
+        self.advance()?;
+        Ok(Some(self.copy_canvas_into(destination)?))
+    }
+
+    pub(crate) fn advance(&mut self) -> Result<()> {
         self.apply_previous_disposal();
         let info = self.decoder.frame_info(self.next_index)?;
         self.restore_canvas = if info.disposal == DisposalMethod::Previous {
@@ -807,20 +849,33 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
         self.previous_frame = Some(info);
         self.next_index += 1;
 
-        let pixels = match self.output {
-            PixelFormat::Rgba8 => self.canvas.clone(),
-            PixelFormat::Rgb8 => self
-                .canvas
-                .chunks_exact(4)
-                .flat_map(|pixel| pixel[..3].iter().copied())
-                .collect(),
-        };
-        Ok(Some(DecodedImage::new(
-            self.decoder.info().width(),
-            self.decoder.info().height(),
-            self.output,
-            pixels,
-        )))
+        Ok(())
+    }
+
+    pub(crate) fn copy_canvas_into(&self, destination: &mut [u8]) -> Result<usize> {
+        let required = self.output_buffer_size()?;
+        if destination.len() < required {
+            return Err(Error::new(
+                ErrorKind::OutputBufferTooSmall,
+                format!(
+                    "output buffer has {} bytes; {required} required",
+                    destination.len()
+                ),
+            ));
+        }
+        match self.output {
+            PixelFormat::Rgba8 => destination[..required].copy_from_slice(&self.canvas),
+            PixelFormat::Rgb8 => {
+                for (source, output) in self
+                    .canvas
+                    .chunks_exact(4)
+                    .zip(destination[..required].chunks_exact_mut(3))
+                {
+                    output.copy_from_slice(&source[..3]);
+                }
+            }
+        }
+        Ok(required)
     }
 
     fn apply_previous_disposal(&mut self) {

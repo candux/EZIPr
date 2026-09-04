@@ -192,3 +192,24 @@ fn reports_palette_resources_as_unsupported() {
         ErrorKind::UnsupportedFormat
     );
 }
+
+#[test]
+fn decodes_stored_frames_into_caller_buffers() {
+    let decoder = Decoder::new(include_bytes!("fixtures/static/ezip-rgb888.bin")).unwrap();
+    assert_eq!(decoder.frame_buffer_size(0, PixelFormat::Rgb8).unwrap(), 96);
+
+    let mut too_small = [0x55; 95];
+    let error = decoder
+        .decode_frame_into(0, PixelFormat::Rgb8, &mut too_small)
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::OutputBufferTooSmall);
+    assert!(too_small.iter().all(|&byte| byte == 0x55));
+
+    let mut destination = [0x55; 100];
+    let written = decoder
+        .decode_frame_into(0, PixelFormat::Rgb8, &mut destination)
+        .unwrap();
+    assert_eq!(written, 96);
+    assert_eq!(&destination[..written], expected_rgb());
+    assert_eq!(&destination[written..], &[0x55; 4]);
+}

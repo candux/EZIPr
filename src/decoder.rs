@@ -1,4 +1,4 @@
-use crate::pixels::decode_storage_pixels;
+use crate::pixels::{decode_storage_pixels, decode_storage_pixels_into, decoded_pixel_len};
 use crate::stream::{inflate_stream, unfilter};
 use crate::{
     DecodedImage, Error, ErrorKind, FrameInfo, PixelFormat, Repeat, ResourceFormat, ResourceHeader,
@@ -462,11 +462,78 @@ impl<'a> Decoder<'a> {
         })
     }
 
+    /// Compose a frame into a caller-owned tightly packed output buffer.
+    ///
+    /// This replays the animation from its beginning and therefore takes time
+    /// proportional to `index`. Use [`Self::compositor`] for sequential access.
+    pub fn decode_composited_frame_into(
+        &self,
+        index: usize,
+        output: PixelFormat,
+        destination: &mut [u8],
+    ) -> Result<usize> {
+        if index >= self.info.frame_count {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                format!("frame index {index} is outside the animation"),
+            )
+            .in_frame(index));
+        }
+        let required = decoded_pixel_len(self.info.width, self.info.height, output)?;
+        if destination.len() < required {
+            return Err(Error::new(
+                ErrorKind::OutputBufferTooSmall,
+                format!(
+                    "output buffer has {} bytes; {required} required",
+                    destination.len()
+                ),
+            ));
+        }
+        let mut compositor = self.compositor(output)?;
+        for _ in 0..=index {
+            compositor.advance()?;
+        }
+        compositor.copy_canvas_into(destination)
+    }
+
+    /// Number of bytes required to decode a stored frame in `output` format.
+    pub fn frame_buffer_size(&self, index: usize, output: PixelFormat) -> Result<usize> {
+        let info = self.frame_info(index)?;
+        decoded_pixel_len(info.width(), info.height(), output)
+    }
+
+    /// Decode a stored frame rectangle into a caller-owned tightly packed buffer.
+    pub fn decode_frame_into(
+        &self,
+        index: usize,
+        output: PixelFormat,
+        destination: &mut [u8],
+    ) -> Result<usize> {
+        let (payload, width, height) = self.frame_payload(index)?;
+        decode_storage_pixels_into(
+            payload,
+            width,
+            height,
+            self.info.storage_format,
+            output,
+            destination,
+        )
+    }
+
     pub fn decode_frame(&self, index: usize, output: PixelFormat) -> Result<DecodedImage> {
-        let (payload, width, height) = match &self.payload {
-            Payload::Pixel(payload) if index == 0 => (*payload, self.info.width, self.info.height),
+        let (payload, width, height) = self.frame_payload(index)?;
+        let pixels =
+            decode_storage_pixels(payload, width, height, self.info.storage_format, output)?;
+        Ok(DecodedImage::new(width, height, output, pixels))
+    }
+
+    fn frame_payload(&self, index: usize) -> Result<(&[u8], u32, u32)> {
+        match &self.payload {
+            Payload::Pixel(payload) if index == 0 => {
+                Ok((*payload, self.info.width, self.info.height))
+            }
             Payload::Ezip(payload) if index == 0 => {
-                (payload.as_slice(), self.info.width, self.info.height)
+                Ok((payload.as_slice(), self.info.width, self.info.height))
             }
             Payload::Animation(animation) => {
                 let frame = animation.frames.get(index).ok_or_else(|| {
@@ -476,11 +543,11 @@ impl<'a> Decoder<'a> {
                     )
                     .in_frame(index)
                 })?;
-                (
+                Ok((
                     frame.pixels.as_slice(),
                     frame.info.width(),
                     frame.info.height(),
-                )
+                ))
             }
             Payload::Pixel(_) | Payload::Ezip(_) => {
                 return Err(Error::new(
@@ -489,9 +556,6 @@ impl<'a> Decoder<'a> {
                 )
                 .in_frame(index));
             }
-        };
-        let pixels =
-            decode_storage_pixels(payload, width, height, self.info.storage_format, output)?;
-        Ok(DecodedImage::new(width, height, output, pixels))
+        }
     }
 }
