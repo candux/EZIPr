@@ -901,6 +901,7 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
             DisposalMethod::Background => clear_rectangle(
                 &mut self.canvas,
                 self.decoder.info().width() as usize,
+                self.decoder.info().height() as usize,
                 previous,
             ),
             DisposalMethod::Previous => {
@@ -913,11 +914,15 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
 
     fn draw(&mut self, info: FrameInfo, pixels: &[u8]) {
         let canvas_width = self.decoder.info().width() as usize;
-        for y in 0..info.height as usize {
-            for x in 0..info.width as usize {
+        let canvas_height = self.decoder.info().height() as usize;
+        let x_offset = info.x_offset as usize;
+        let y_offset = info.y_offset as usize;
+        let draw_width = (info.width as usize).min(canvas_width.saturating_sub(x_offset));
+        let draw_height = (info.height as usize).min(canvas_height.saturating_sub(y_offset));
+        for y in 0..draw_height {
+            for x in 0..draw_width {
                 let source_index = (y * info.width as usize + x) * 4;
-                let destination_index =
-                    ((y + info.y_offset as usize) * canvas_width + x + info.x_offset as usize) * 4;
+                let destination_index = ((y + y_offset) * canvas_width + x + x_offset) * 4;
                 let source: [u8; 4] = pixels[source_index..source_index + 4]
                     .try_into()
                     .expect("decoded RGBA pixel");
@@ -936,10 +941,14 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
     }
 }
 
-fn clear_rectangle(canvas: &mut [u8], canvas_width: usize, info: FrameInfo) {
-    for y in info.y_offset as usize..(info.y_offset + info.height) as usize {
-        let start = (y * canvas_width + info.x_offset as usize) * 4;
-        let end = start + info.width as usize * 4;
+fn clear_rectangle(canvas: &mut [u8], canvas_width: usize, canvas_height: usize, info: FrameInfo) {
+    let x_offset = info.x_offset as usize;
+    let y_offset = info.y_offset as usize;
+    let clear_width = (info.width as usize).min(canvas_width.saturating_sub(x_offset));
+    let clear_height = (info.height as usize).min(canvas_height.saturating_sub(y_offset));
+    for y in y_offset..y_offset + clear_height {
+        let start = (y * canvas_width + x_offset) * 4;
+        let end = start + clear_width * 4;
         canvas[start..end].fill(0);
     }
 }

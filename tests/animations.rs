@@ -1,6 +1,6 @@
 use ezipr::{
-    BlendMode, DecodeLimits, DecodeOptions, Decoder, DisposalMethod, ErrorKind, PixelFormat,
-    Repeat, ResourceKind, StorageFormat,
+    BlendMode, DecodeLimits, DecodeMode, DecodeOptions, Decoder, DisposalMethod, ErrorKind,
+    PixelFormat, Repeat, ResourceFormat, ResourceHeader, ResourceKind, StorageFormat, WarningKind,
 };
 
 const ANIMATION: &[u8] = include_bytes!("fixtures/animation/controlled.bin");
@@ -314,4 +314,27 @@ fn composes_frames_into_reusable_caller_buffers() {
         random.len()
     );
     assert_eq!(random, expected.pixels());
+}
+
+#[test]
+fn diagnostic_compositor_clips_frames_to_the_resource_canvas() {
+    let mut data = ANIMATION.to_vec();
+    data[..4].copy_from_slice(
+        &ResourceHeader::new(ResourceFormat::EzipArgb565, 7, 5)
+            .unwrap()
+            .to_bytes(),
+    );
+    let options = DecodeOptions::new().mode(DecodeMode::Diagnostic);
+    let decoder = Decoder::with_options(&data, options).unwrap();
+    assert_eq!((decoder.info().width(), decoder.info().height()), (7, 5));
+    assert_eq!(decoder.warnings().len(), 1);
+    assert_eq!(decoder.warnings()[0].kind(), WarningKind::MetadataMismatch);
+
+    let mut compositor = decoder.compositor(PixelFormat::Rgba8).unwrap();
+    for _ in 0..3 {
+        let image = compositor.next_frame().unwrap().unwrap();
+        assert_eq!((image.width(), image.height()), (7, 5));
+        assert_eq!(image.pixels().len(), 7 * 5 * 4);
+    }
+    assert!(compositor.next_frame().unwrap().is_none());
 }
