@@ -168,3 +168,27 @@ fn decodes_shared_huffman_across_multiple_row_blocks() {
     assert_eq!((image.width(), image.height()), (8, 70));
     assert_eq!(image.pixels(), expected_multiblock_rgb());
 }
+
+#[test]
+fn validates_shared_huffman_block_offsets() {
+    let mut data = include_bytes!("fixtures/static/ezip-rgb888-multiblock.bin").to_vec();
+    data[24..28].copy_from_slice(&0_u32.to_be_bytes());
+    let declared = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    let crc = crc32fast::hash(&data[4..4 + declared]);
+    data[4 + declared..8 + declared].copy_from_slice(&crc.to_le_bytes());
+
+    assert_eq!(
+        Decoder::new(&data).unwrap_err().kind(),
+        ErrorKind::InvalidOffset
+    );
+}
+
+#[test]
+fn reports_palette_resources_as_unsupported() {
+    let mut data = include_bytes!("fixtures/static/ezip-rgb565.bin").to_vec();
+    data[17] = 1;
+    assert_eq!(
+        Decoder::new(&data).unwrap_err().kind(),
+        ErrorKind::UnsupportedFormat
+    );
+}

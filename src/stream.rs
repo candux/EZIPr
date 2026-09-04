@@ -307,8 +307,36 @@ fn inflate_shared(
             "shared-Huffman block table is truncated",
         ));
     }
+    let raw_offset = StreamHeader::BYTE_LEN + table_size;
+    let mut block_offsets = Vec::with_capacity(block_count);
+    for index in 0..block_count {
+        let entry_offset = 4 + index * 4;
+        let offset = u32::from_be_bytes(
+            container[entry_offset..entry_offset + 4]
+                .try_into()
+                .expect("block-offset entry length was checked"),
+        ) as usize;
+        if offset % 4 != 0 || offset < raw_offset || offset >= declared_size {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                format!("shared-Huffman block {index} has invalid offset {offset}"),
+            )
+            .at_offset(StreamHeader::BYTE_LEN + entry_offset));
+        }
+        if block_offsets
+            .last()
+            .is_some_and(|previous| *previous >= offset)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                "shared-Huffman block offsets are not strictly increasing",
+            )
+            .at_offset(StreamHeader::BYTE_LEN + entry_offset));
+        }
+        block_offsets.push(offset);
+    }
     let raw_stream = &container[table_size..];
-    let bytes = decode_shared_huffman(raw_stream, max_output)?;
+    let bytes = decode_shared_huffman(raw_stream, max_output, &block_offsets, raw_offset)?;
     Ok(Inflated {
         bytes,
         block_rows: block_rows as u8,
@@ -437,7 +465,12 @@ impl HuffmanTree {
     }
 }
 
-fn decode_shared_huffman(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
+fn decode_shared_huffman(
+    data: &[u8],
+    max_output: usize,
+    block_offsets: &[usize],
+    raw_offset: usize,
+) -> Result<Vec<u8>> {
     let mut reader = BitReader::new(data);
     let literal_count = reader.read_bits(5)? + 257;
     let distance_count = reader.read_bits(5)? + 1;
@@ -506,7 +539,19 @@ fn decode_shared_huffman(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
     let distance_tree = HuffmanTree::from_lengths(&lengths[literal_count..])?;
     reader.align_four_bytes();
     let mut output = Vec::new();
-    loop {
+    for (block_index, &expected_offset) in block_offsets.iter().enumerate() {
+        let actual_offset = raw_offset
+            .checked_add(reader.bit_position / 8)
+            .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "block offset overflow"))?;
+        if actual_offset != expected_offset {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                format!(
+                    "shared-Huffman block {block_index} starts at {actual_offset}, table declares {expected_offset}"
+                ),
+            )
+            .at_offset(expected_offset));
+        }
         let final_block = reader.read_bit()? != 0;
         let block_type = reader.read_bits(2)?;
         match block_type {
@@ -573,8 +618,16 @@ fn decode_shared_huffman(data: &[u8], max_output: usize) -> Result<Vec<u8>> {
             }
         }
         reader.align_four_bytes();
-        if final_block {
-            break;
+        let should_be_final = block_index + 1 == block_offsets.len();
+        if final_block != should_be_final {
+            return Err(Error::new(
+                ErrorKind::InvalidCompression,
+                if final_block {
+                    "shared-Huffman stream ends before its declared block count"
+                } else {
+                    "shared-Huffman final block marker is missing"
+                },
+            ));
         }
     }
     Ok(output)

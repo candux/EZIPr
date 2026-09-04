@@ -267,6 +267,12 @@ impl<'a> Decoder<'a> {
             }
             ResourceKind::Ezip => {
                 let stream_header = crate::StreamHeader::parse(payload)?;
+                if stream_header.palette_count() != 0 {
+                    return Err(Error::new(
+                        ErrorKind::UnsupportedFormat,
+                        "palette-backed eZIP resources require a verified fixture",
+                    ));
+                }
                 let mut warnings = Vec::new();
                 if (stream_header.width(), stream_header.height())
                     != (header.width(), header.height())
