@@ -26,3 +26,7 @@ png = { version = "0.18", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 toml = { version = "0.9", optional = true }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
