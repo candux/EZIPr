@@ -16,3 +16,21 @@ storage = "argb888"
 width = 8
 height = 6
 frames = 3
+
+[[resources]]
+file = "opaque-rgb565.bin"
+source = "source-opaque.png"
+kind = "animation"
+storage = "rgb565"
+width = 8
+height = 6
+frames = 3
+
+[[resources]]
+file = "opaque-rgb888.bin"
+source = "source-opaque.png"
+kind = "animation"
+storage = "rgb888"
+width = 8
+height = 6
+frames = 3

@@ -5,6 +5,39 @@ use ezipr::{
 
 const ANIMATION: &[u8] = include_bytes!("fixtures/animation/controlled.bin");
 const ANIMATION_ARGB888: &[u8] = include_bytes!("fixtures/animation/controlled-argb888.bin");
+const ANIMATION_RGB565: &[u8] = include_bytes!("fixtures/animation/opaque-rgb565.bin");
+const ANIMATION_RGB888: &[u8] = include_bytes!("fixtures/animation/opaque-rgb888.bin");
+
+fn opaque_source_color(frame: usize, x: usize, y: usize) -> [u8; 3] {
+    match frame {
+        0 => [
+            (x * 31 + y * 7) as u8,
+            (x * 9 + y * 23) as u8,
+            (x * 3 + y * 5) as u8,
+        ],
+        1 => [
+            (x * 5 + y * 13) as u8,
+            (200 + x * 4 - y * 7) as u8,
+            (x * 29 + y * 11) as u8,
+        ],
+        2 => [
+            (220 - x * 17 + y * 3) as u8,
+            (x * 15 + y * 19) as u8,
+            (180 + x * 7 - y * 9) as u8,
+        ],
+        _ => unreachable!(),
+    }
+}
+
+fn opaque_frame(frame: usize) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(8 * 6 * 3);
+    for y in 0..6 {
+        for x in 0..8 {
+            pixels.extend_from_slice(&opaque_source_color(frame, x, y));
+        }
+    }
+    pixels
+}
 
 #[test]
 fn parses_owned_animation_metadata() {
@@ -124,6 +157,34 @@ fn decodes_owned_argb888_animation_exactly() {
             .chunks_exact(4)
             .all(|pixel| pixel == [0, 0, 255, 255])
     );
+}
+
+#[test]
+fn decodes_owned_opaque_animation_layouts() {
+    for (data, storage, rgb565) in [
+        (ANIMATION_RGB565, StorageFormat::Rgb565, true),
+        (ANIMATION_RGB888, StorageFormat::Rgb888, false),
+    ] {
+        let decoder = Decoder::new(data).unwrap();
+        assert_eq!(decoder.info().kind(), ResourceKind::Animation);
+        assert_eq!(decoder.info().storage_format(), storage);
+        assert_eq!(decoder.info().frame_count(), 3);
+        assert_eq!(decoder.repeat(), Some(Repeat::Finite(2)));
+        for index in 0..3 {
+            let image = decoder.decode_frame(index, PixelFormat::Rgb8).unwrap();
+            let expected = opaque_frame(index);
+            if rgb565 {
+                for (actual, source) in image.pixels().chunks_exact(3).zip(expected.chunks_exact(3))
+                {
+                    assert!(actual[0].abs_diff(source[0]) <= 13);
+                    assert!(actual[1].abs_diff(source[1]) <= 5);
+                    assert!(actual[2].abs_diff(source[2]) <= 13);
+                }
+            } else {
+                assert_eq!(image.pixels(), expected);
+            }
+        }
+    }
 }
 
 #[test]
