@@ -8,7 +8,21 @@ edition = "2024"
 name = "ezipr"
 path = "src/lib.rs"
 
+[features]
+default = []
+cli = ["dep:clap", "dep:gif", "dep:png", "dep:serde", "dep:toml"]
+
+[[bin]]
+name = "ezipr"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [dependencies]
+clap = { version = "4", features = ["derive"], optional = true }
 crc32fast = "1"
+gif = { version = "0.14", optional = true }
 miniz_oxide = "0.9"
+png = { version = "0.18", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
+toml = { version = "0.9", optional = true }
