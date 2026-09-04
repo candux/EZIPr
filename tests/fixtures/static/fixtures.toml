@@ -1,0 +1,23 @@
+origin = "external"
+width = 8
+height = 4
+
+[[resources]]
+file = "pixel-rgb565.bin"
+kind = "pixel"
+storage = "rgb565"
+
+[[resources]]
+file = "pixel-rgb888.bin"
+kind = "pixel"
+storage = "rgb888"
+
+[[resources]]
+file = "pixel-argb565.bin"
+kind = "pixel"
+storage = "argb565"
+
+[[resources]]
+file = "pixel-argb888.bin"
+kind = "pixel"
+storage = "argb888"
