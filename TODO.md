@@ -1,0 +1,26 @@
+# TODO
+
+## Size-optimized encoding
+
+- Add an opt-in encoder mode that minimizes the complete encoded resource size.
+- Include the current adaptive row-filter plan as a baseline so optimization can
+  never produce a larger result.
+- Generate additional legal PNG row-filter plans and select candidates using
+  their actual raw-DEFLATE size instead of only the current per-row residual
+  score.
+- Try several high compression levels because a numerically higher level does
+  not always produce the smallest stream. Use deterministic tie-breaking.
+- Keep pixel order, channel order, and the on-wire representation unchanged.
+- Keep `block_rows = 32` unless the caller explicitly chooses another value;
+  automatically varying it needs compatibility testing on target hardware.
+- Apply the same optimization to static resources and independently compressed
+  animation frames.
+- Add regression tests proving that optimized output decodes to the same pixels,
+  is deterministic, and is no larger than the baseline candidate.
+
+## Optional RGB565 dithering
+
+- Add an explicit, deterministic dithering option for RGB565 and ARGB565
+  encoding while retaining direct quantization as the default.
+- Test gradients and flat-color images for visual quality and compressed-size
+  tradeoffs. Alpha bytes must remain unchanged.

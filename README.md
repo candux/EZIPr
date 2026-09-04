@@ -71,3 +71,22 @@ blend = "over"
 
 A repeat value of zero means infinite playback. Disposal values are `none`,
 `background`, and `previous`; blend values are `source` and `over`.
+
+## RGB565 conversion and dithering
+
+RGB565 stores only five red bits, six green bits, and five blue bits. EZIPr
+currently converts eight-bit input by discarding the low channel bits. It does
+not apply dithering.
+
+The reference encoder dithers colors while reducing true-color PNG input to
+RGB565. Consequently, EZIPr and reference-encoded resources made from the same
+image can decode to slightly different RGB values even when both files are
+valid. Smooth gradients may show more banding with EZIPr's direct conversion;
+the dithered result replaces some of that banding with fine pixel-level noise.
+The undithered pixels can also compress substantially better because they tend
+to contain longer repeated patterns.
+
+This difference is limited to reduced-precision color encoding and is not
+evidence of a decoding error. RGB888 does not require this quantization and can
+preserve the source RGB bytes exactly. Optional deterministic RGB565 dithering
+is tracked in [TODO.md](TODO.md).
