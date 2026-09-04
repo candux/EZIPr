@@ -9,7 +9,9 @@ mod header;
 mod pixels;
 mod stream;
 
-pub use animation::{BlendMode, Compositor, DisposalMethod, FrameInfo, Repeat};
+pub use animation::{
+    AnimationEncoder, BlendMode, Compositor, DisposalMethod, FrameInfo, FrameView, Repeat,
+};
 pub use decoder::{DecodeLimits, DecodeMode, DecodeOptions, Decoder, ResourceInfo};
 pub use encoder::{
     AlphaMode, ColorDepth, EncodeOptions, EncodedResource, Encoder, ResourceEncoding,

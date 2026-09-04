@@ -8,3 +8,11 @@ storage = "argb565"
 width = 8
 height = 6
 frames = 3
+
+[[resources]]
+file = "controlled-argb888.bin"
+kind = "animation"
+storage = "argb888"
+width = 8
+height = 6
+frames = 3

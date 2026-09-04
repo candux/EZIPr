@@ -121,3 +121,7 @@ The container layout, frame fields, checksums, alignment, timing, rectangle,
 disposal, and blend values are confirmed by the project-owned controlled
 animation fixture. Palette serialization remains recognized but unsupported
 until a fixture establishes its byte semantics.
+
+The animation encoder writes the same container using raw-DEFLATE frame data.
+It resolves one storage format across the complete frame set, preserves caller
+supplied rectangles and timing, and aligns every frame record after the first.

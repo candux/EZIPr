@@ -7,7 +7,9 @@ manifest adapters.
 
 Static PIXEL, standard eZIP, shared-Huffman eZIP, and eZIP-A frame decoding are
 supported. Animated resources expose stored frame rectangles as well as a
-stateful sequential compositor for blend and disposal handling.
+stateful sequential compositor for blend and disposal handling. Native eZIP-A
+encoding accepts explicit frame rectangles, timing, disposal, blend, and
+repeat metadata.
 
 The implementation is under active development. The checked-in tests define
 the currently supported format surface.

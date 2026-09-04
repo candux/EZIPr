@@ -136,6 +136,18 @@ pub struct EncodedResource {
 }
 
 impl EncodedResource {
+    pub(crate) fn new(
+        bytes: Vec<u8>,
+        storage_format: StorageFormat,
+        resource_format: ResourceFormat,
+    ) -> Self {
+        Self {
+            bytes,
+            storage_format,
+            resource_format,
+        }
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -188,22 +200,9 @@ impl Encoder {
             )
         })?;
         let has_alpha = resolve_alpha(image, self.options.alpha_mode);
-        let storage_format = match (self.options.color_depth, has_alpha) {
-            (ColorDepth::Rgb565, false) => StorageFormat::Rgb565,
-            (ColorDepth::Rgb888, false) => StorageFormat::Rgb888,
-            (ColorDepth::Rgb565, true) => StorageFormat::Argb565,
-            (ColorDepth::Rgb888, true) => StorageFormat::Argb888,
-        };
-        let resource_format = match (self.options.resource_encoding, storage_format) {
-            (ResourceEncoding::Ezip, StorageFormat::Argb565) => ResourceFormat::EzipArgb565,
-            (ResourceEncoding::Ezip, _) => ResourceFormat::Ezip,
-            (ResourceEncoding::Pixel, StorageFormat::Rgb565 | StorageFormat::Rgb888) => {
-                ResourceFormat::Pixel
-            }
-            (ResourceEncoding::Pixel, StorageFormat::Argb565 | StorageFormat::Argb888) => {
-                ResourceFormat::PixelWithAlpha
-            }
-        };
+        let storage_format = resolve_storage(self.options.color_depth, has_alpha);
+        let resource_format =
+            resolve_resource_format(self.options.resource_encoding, storage_format);
         let header = ResourceHeader::new(resource_format, width, height)?;
         let stored_pixels = encode_storage_pixels(image, storage_format)?;
         let mut bytes = header.to_bytes().to_vec();
@@ -237,11 +236,7 @@ impl Encoder {
                     })?;
                 bytes.extend_from_slice(&stream_size.to_be_bytes());
                 bytes.push(0x10 | color_type(storage_format));
-                bytes.push(match storage_format {
-                    StorageFormat::Rgb565 => 16,
-                    StorageFormat::Argb565 => 24,
-                    StorageFormat::Rgb888 | StorageFormat::Argb888 => 8,
-                });
+                bytes.push(storage_bit_depth(storage_format));
                 bytes.push(self.options.block_rows);
                 bytes.push(0);
                 bytes.extend_from_slice(&width.to_be_bytes());
@@ -254,11 +249,7 @@ impl Encoder {
                 bytes.extend_from_slice(&checksum.to_be_bytes());
             }
         }
-        Ok(EncodedResource {
-            bytes,
-            storage_format,
-            resource_format,
-        })
+        Ok(EncodedResource::new(bytes, storage_format, resource_format))
     }
 }
 
@@ -278,7 +269,35 @@ fn resolve_alpha(image: ImageView<'_>, mode: AlphaMode) -> bool {
     }
 }
 
-fn encode_storage_pixels(image: ImageView<'_>, storage: StorageFormat) -> Result<Vec<u8>> {
+pub(crate) const fn resolve_storage(depth: ColorDepth, has_alpha: bool) -> StorageFormat {
+    match (depth, has_alpha) {
+        (ColorDepth::Rgb565, false) => StorageFormat::Rgb565,
+        (ColorDepth::Rgb888, false) => StorageFormat::Rgb888,
+        (ColorDepth::Rgb565, true) => StorageFormat::Argb565,
+        (ColorDepth::Rgb888, true) => StorageFormat::Argb888,
+    }
+}
+
+pub(crate) const fn resolve_resource_format(
+    encoding: ResourceEncoding,
+    storage: StorageFormat,
+) -> ResourceFormat {
+    match (encoding, storage) {
+        (ResourceEncoding::Ezip, StorageFormat::Argb565) => ResourceFormat::EzipArgb565,
+        (ResourceEncoding::Ezip, _) => ResourceFormat::Ezip,
+        (ResourceEncoding::Pixel, StorageFormat::Rgb565 | StorageFormat::Rgb888) => {
+            ResourceFormat::Pixel
+        }
+        (ResourceEncoding::Pixel, StorageFormat::Argb565 | StorageFormat::Argb888) => {
+            ResourceFormat::PixelWithAlpha
+        }
+    }
+}
+
+pub(crate) fn encode_storage_pixels(
+    image: ImageView<'_>,
+    storage: StorageFormat,
+) -> Result<Vec<u8>> {
     let pixel_count = (image.width() as usize)
         .checked_mul(image.height() as usize)
         .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "pixel count overflow"))?;
@@ -313,7 +332,7 @@ fn encode_storage_pixels(image: ImageView<'_>, storage: StorageFormat) -> Result
     Ok(output)
 }
 
-fn color_type(storage: StorageFormat) -> u8 {
+pub(crate) const fn color_type(storage: StorageFormat) -> u8 {
     match storage {
         StorageFormat::Rgb888 => 2,
         StorageFormat::Argb888 => 6,
@@ -322,7 +341,15 @@ fn color_type(storage: StorageFormat) -> u8 {
     }
 }
 
-fn filter_rows(
+pub(crate) const fn storage_bit_depth(storage: StorageFormat) -> u8 {
+    match storage {
+        StorageFormat::Rgb565 => 16,
+        StorageFormat::Argb565 => 24,
+        StorageFormat::Rgb888 | StorageFormat::Argb888 => 8,
+    }
+}
+
+pub(crate) fn filter_rows(
     pixels: &[u8],
     width: usize,
     height: usize,

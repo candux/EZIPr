@@ -1,6 +1,7 @@
 use crate::stream::unfilter;
 use crate::{
-    DecodeLimits, DecodeMode, DecodedImage, Decoder, Error, ErrorKind, PixelFormat, Result,
+    AlphaMode, DecodeLimits, DecodeMode, DecodedImage, Decoder, EncodeOptions, EncodedResource,
+    Error, ErrorKind, ImageView, PixelFormat, ResourceEncoding, ResourceHeader, Result,
     StorageFormat, StreamHeader, Warning, WarningKind,
 };
 
@@ -106,6 +107,326 @@ impl FrameInfo {
             disposal: DisposalMethod::None,
             blend: BlendMode::Source,
         }
+    }
+}
+
+/// Borrowed pixels and metadata supplied for one animation frame rectangle.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameView<'a> {
+    image: ImageView<'a>,
+    x_offset: u32,
+    y_offset: u32,
+    delay_numerator: u16,
+    delay_denominator: u16,
+    disposal: DisposalMethod,
+    blend: BlendMode,
+}
+
+impl<'a> FrameView<'a> {
+    pub fn new(
+        image: ImageView<'a>,
+        x_offset: u32,
+        y_offset: u32,
+        delay_numerator: u16,
+        delay_denominator: u16,
+    ) -> Self {
+        Self {
+            image,
+            x_offset,
+            y_offset,
+            delay_numerator,
+            delay_denominator,
+            disposal: DisposalMethod::None,
+            blend: BlendMode::Source,
+        }
+    }
+
+    pub fn disposal(mut self, disposal: DisposalMethod) -> Self {
+        self.disposal = disposal;
+        self
+    }
+
+    pub fn blend(mut self, blend: BlendMode) -> Self {
+        self.blend = blend;
+        self
+    }
+
+    pub const fn image(self) -> ImageView<'a> {
+        self.image
+    }
+
+    pub const fn x_offset(self) -> u32 {
+        self.x_offset
+    }
+
+    pub const fn y_offset(self) -> u32 {
+        self.y_offset
+    }
+
+    pub const fn delay_numerator(self) -> u16 {
+        self.delay_numerator
+    }
+
+    pub const fn delay_denominator(self) -> u16 {
+        self.delay_denominator
+    }
+
+    pub const fn disposal_method(self) -> DisposalMethod {
+        self.disposal
+    }
+
+    pub const fn blend_mode(self) -> BlendMode {
+        self.blend
+    }
+}
+
+#[derive(Debug)]
+struct OwnedFrame {
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    pixels: Vec<u8>,
+    x_offset: u32,
+    y_offset: u32,
+    delay_numerator: u16,
+    delay_denominator: u16,
+    disposal: DisposalMethod,
+    blend: BlendMode,
+}
+
+/// Builder for a complete eZIP-A animation resource.
+#[derive(Debug)]
+pub struct AnimationEncoder {
+    width: u16,
+    height: u16,
+    repeat: Repeat,
+    options: EncodeOptions,
+    frames: Vec<OwnedFrame>,
+}
+
+impl AnimationEncoder {
+    pub fn new(width: u32, height: u32, repeat: Repeat, options: EncodeOptions) -> Result<Self> {
+        let width = u16::try_from(width).map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidDimensions,
+                "animation width does not fit the resource header",
+            )
+        })?;
+        let height = u16::try_from(height).map_err(|_| {
+            Error::new(
+                ErrorKind::InvalidDimensions,
+                "animation height does not fit the resource header",
+            )
+        })?;
+        ResourceHeader::new(crate::ResourceFormat::Ezip, width, height)?;
+        if options.encoding() != ResourceEncoding::Ezip {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "animation encoding requires the eZIP representation",
+            ));
+        }
+        if repeat == Repeat::Finite(0) {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "a finite animation repeat count must be positive",
+            ));
+        }
+        Ok(Self {
+            width,
+            height,
+            repeat,
+            options,
+            frames: Vec::new(),
+        })
+    }
+
+    pub const fn width(&self) -> u16 {
+        self.width
+    }
+
+    pub const fn height(&self) -> u16 {
+        self.height
+    }
+
+    pub const fn repeat(&self) -> Repeat {
+        self.repeat
+    }
+
+    pub const fn options(&self) -> EncodeOptions {
+        self.options
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn push_frame(&mut self, frame: FrameView<'_>) -> Result<()> {
+        let image = frame.image;
+        if frame
+            .x_offset
+            .checked_add(image.width())
+            .is_none_or(|right| right > u32::from(self.width))
+            || frame
+                .y_offset
+                .checked_add(image.height())
+                .is_none_or(|bottom| bottom > u32::from(self.height))
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidDimensions,
+                format!(
+                    "frame rectangle {}x{}+{}+{} exceeds the {}x{} canvas",
+                    image.width(),
+                    image.height(),
+                    frame.x_offset,
+                    frame.y_offset,
+                    self.width,
+                    self.height
+                ),
+            ));
+        }
+        let row_bytes = image.width() as usize * image.format().bytes_per_pixel();
+        let capacity = row_bytes
+            .checked_mul(image.height() as usize)
+            .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "frame size overflow"))?;
+        let mut pixels = Vec::with_capacity(capacity);
+        for row in 0..image.height() as usize {
+            let start = row * image.stride();
+            pixels.extend_from_slice(&image.pixels()[start..start + row_bytes]);
+        }
+        self.frames.push(OwnedFrame {
+            width: image.width(),
+            height: image.height(),
+            format: image.format(),
+            pixels,
+            x_offset: frame.x_offset,
+            y_offset: frame.y_offset,
+            delay_numerator: frame.delay_numerator,
+            delay_denominator: frame.delay_denominator,
+            disposal: frame.disposal,
+            blend: frame.blend,
+        });
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<EncodedResource> {
+        if self.frames.is_empty() {
+            return Err(Error::new(
+                ErrorKind::InvalidAnimation,
+                "cannot encode an animation without frames",
+            ));
+        }
+        let frame_count = u32::try_from(self.frames.len())
+            .map_err(|_| Error::new(ErrorKind::LimitExceeded, "too many animation frames"))?;
+        let has_alpha = match self.options.alpha_policy() {
+            AlphaMode::Preserve => true,
+            AlphaMode::Discard => false,
+            AlphaMode::Auto => self.frames.iter().any(|frame| {
+                frame.format == PixelFormat::Rgba8
+                    && frame.pixels.chunks_exact(4).any(|pixel| pixel[3] != 255)
+            }),
+        };
+        let storage = crate::encoder::resolve_storage(self.options.color_depth(), has_alpha);
+        let resource_format =
+            crate::encoder::resolve_resource_format(ResourceEncoding::Ezip, storage);
+        let outer = ResourceHeader::new(resource_format, self.width, self.height)?;
+
+        let table_len = self
+            .frames
+            .len()
+            .checked_mul(4)
+            .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "frame table size overflow"))?;
+        let mut inner =
+            Vec::with_capacity(ANIMATION_HEADER_LEN + ANIMATION_CONTROL_LEN + table_len);
+        inner.extend_from_slice(&[0; 4]);
+        inner.push(0x50 | crate::encoder::color_type(storage));
+        inner.push(crate::encoder::storage_bit_depth(storage));
+        inner.push(self.options.rows_per_block());
+        inner.push(0);
+        inner.extend_from_slice(&self.width.to_be_bytes());
+        inner.extend_from_slice(&self.height.to_be_bytes());
+        inner.push(u8::from(!self.options.uses_row_filters()));
+        inner.extend_from_slice(&[0, 0, 0]);
+        inner.extend_from_slice(&frame_count.to_be_bytes());
+        let play_count = match self.repeat {
+            Repeat::Infinite => 0,
+            Repeat::Finite(count) => count,
+        };
+        inner.extend_from_slice(&play_count.to_be_bytes());
+        let table_offset = inner.len();
+        inner.resize(table_offset + table_len, 0);
+
+        let mut offsets = Vec::with_capacity(self.frames.len());
+        for (index, frame) in self.frames.iter().enumerate() {
+            if index != 0 {
+                while inner.len() % 4 != 0 {
+                    inner.push(0);
+                }
+            }
+            offsets.push(u32::try_from(inner.len()).map_err(|_| {
+                Error::new(ErrorKind::LimitExceeded, "animation offset exceeds 32 bits")
+            })?);
+            inner.extend_from_slice(&(index as u32).to_be_bytes());
+            inner.extend_from_slice(&frame.width.to_be_bytes());
+            inner.extend_from_slice(&frame.height.to_be_bytes());
+            inner.extend_from_slice(&frame.x_offset.to_be_bytes());
+            inner.extend_from_slice(&frame.y_offset.to_be_bytes());
+            inner.extend_from_slice(&frame.delay_numerator.to_be_bytes());
+            inner.extend_from_slice(&frame.delay_denominator.to_be_bytes());
+            inner.push(match frame.disposal {
+                DisposalMethod::None => 0,
+                DisposalMethod::Background => 1,
+                DisposalMethod::Previous => 2,
+            });
+            inner.push(match frame.blend {
+                BlendMode::Source => 0,
+                BlendMode::Over => 1,
+            });
+            let stride = frame.width as usize * frame.format.bytes_per_pixel();
+            let image = ImageView::new(
+                frame.width,
+                frame.height,
+                frame.format,
+                stride,
+                &frame.pixels,
+            )?;
+            let stored = crate::encoder::encode_storage_pixels(image, storage)?;
+            let filtered = if self.options.uses_row_filters() {
+                crate::encoder::filter_rows(
+                    &stored,
+                    frame.width as usize,
+                    frame.height as usize,
+                    storage.bytes_per_pixel(),
+                    self.options.rows_per_block(),
+                )
+            } else {
+                stored
+            };
+            let compressed = miniz_oxide::deflate::compress_to_vec(&filtered, self.options.level());
+            let compressed_size = u32::try_from(compressed.len()).map_err(|_| {
+                Error::new(ErrorKind::LimitExceeded, "compressed frame exceeds 32 bits")
+            })?;
+            inner.extend_from_slice(&((compressed_size >> 16) as u16).to_be_bytes());
+            inner.extend_from_slice(&(compressed_size as u16).to_be_bytes());
+            inner.extend_from_slice(&compressed);
+            let checksum = miniz_oxide::mz_adler32_oxide(miniz_oxide::MZ_ADLER32_INIT, &filtered);
+            inner.extend_from_slice(&checksum.to_be_bytes());
+        }
+        for (index, offset) in offsets.into_iter().enumerate() {
+            inner[table_offset + index * 4..table_offset + index * 4 + 4]
+                .copy_from_slice(&offset.to_be_bytes());
+        }
+        let declared_size = u32::try_from(inner.len()).map_err(|_| {
+            Error::new(
+                ErrorKind::LimitExceeded,
+                "animation container exceeds 32 bits",
+            )
+        })?;
+        inner[0..4].copy_from_slice(&declared_size.to_be_bytes());
+        let crc = crc32fast::hash(&inner);
+        let mut bytes = outer.to_bytes().to_vec();
+        bytes.extend_from_slice(&inner);
+        bytes.extend_from_slice(&crc.to_le_bytes());
+        Ok(EncodedResource::new(bytes, storage, resource_format))
     }
 }
 

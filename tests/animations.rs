@@ -4,6 +4,7 @@ use ezipr::{
 };
 
 const ANIMATION: &[u8] = include_bytes!("fixtures/animation/controlled.bin");
+const ANIMATION_ARGB888: &[u8] = include_bytes!("fixtures/animation/controlled-argb888.bin");
 
 #[test]
 fn parses_owned_animation_metadata() {
@@ -94,6 +95,34 @@ fn decodes_stored_frame_rectangles() {
             .pixels()
             .chunks_exact(4)
             .all(|pixel| { pixel[0] <= 8 && pixel[1] <= 4 && pixel[2] == 255 && pixel[3] == 255 })
+    );
+}
+
+#[test]
+fn decodes_owned_argb888_animation_exactly() {
+    let decoder = Decoder::new(ANIMATION_ARGB888).unwrap();
+    assert_eq!(decoder.info().storage_format(), StorageFormat::Argb888);
+    assert_eq!(decoder.info().frame_count(), 3);
+
+    let first = decoder.decode_frame(0, PixelFormat::Rgba8).unwrap();
+    assert!(
+        first
+            .pixels()
+            .chunks_exact(4)
+            .all(|pixel| pixel == [255, 0, 0, 255])
+    );
+    let second = decoder.decode_frame(1, PixelFormat::Rgba8).unwrap();
+    assert_eq!(&second.pixels()[0..4], &[0, 0, 0, 0]);
+    assert_eq!(
+        &second.pixels()[(1 * 8 + 2) * 4..(1 * 8 + 2) * 4 + 4],
+        &[0, 255, 0, 128]
+    );
+    let third = decoder.decode_frame(2, PixelFormat::Rgba8).unwrap();
+    assert!(
+        third
+            .pixels()
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0, 0, 255, 255])
     );
 }
 
