@@ -1,0 +1,42 @@
+[package]
+name = "ezipr-fuzz"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ezipr = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse_headers"
+path = "fuzz_targets/parse_headers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_static"
+path = "fuzz_targets/decode_static.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_animation"
+path = "fuzz_targets/parse_animation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compose_animation"
+path = "fuzz_targets/compose_animation.rs"
+test = false
+doc = false
+bench = false
