@@ -118,9 +118,11 @@ frame header begins at a four-byte-aligned offset. Disposal values 0, 1, and 2
 mean none, background, and previous; blend values 0 and 1 mean source and over.
 
 The container layout, frame fields, checksums, alignment, timing, rectangle,
-disposal, and blend values are confirmed by the project-owned controlled
-animation fixture. Palette serialization remains recognized but unsupported
-until a fixture establishes its byte semantics.
+disposal, and blend values are confirmed by externally encoded animation
+binaries made from the project-owned controlled PNG sources recorded in the
+fixture manifest. These binaries are not EZIPr encoder output. Palette
+serialization remains recognized but unsupported until a fixture establishes
+its byte semantics.
 
 The animation encoder writes the same container using raw-DEFLATE frame data.
 It resolves one storage format across the complete frame set, preserves caller
