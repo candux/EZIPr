@@ -765,7 +765,10 @@ fn be_u32(data: &[u8], offset: usize) -> u32 {
     )
 }
 
-/// Stateful sequential animation compositor.
+/// Stateful sequential resource compositor.
+///
+/// Static resources produce exactly one full-canvas frame. Animated resources
+/// apply their frame blend and disposal operations as the compositor advances.
 #[derive(Debug)]
 pub struct Compositor<'decoder, 'data> {
     decoder: &'decoder Decoder<'data>,

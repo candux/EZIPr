@@ -258,15 +258,14 @@ fn info(path: &Path, diagnostic: bool) -> CliResult<()> {
 fn verify(path: &Path) -> CliResult<()> {
     let bytes = fs::read(path)?;
     let decoder = parse_decoder(&bytes, false)?;
+    let mut compositor = decoder.compositor(PixelFormat::Rgba8)?;
+    let mut count = 0;
+    while compositor.next_frame()?.is_some() {
+        count += 1;
+    }
     if decoder.info().kind() == ResourceKind::Animation {
-        let mut compositor = decoder.compositor(PixelFormat::Rgba8)?;
-        let mut count = 0;
-        while compositor.next_frame()?.is_some() {
-            count += 1;
-        }
         println!("valid: {count} animation frames decoded");
     } else {
-        decoder.decode_frame(0, PixelFormat::Rgba8)?;
         println!("valid: static resource decoded");
     }
     Ok(())

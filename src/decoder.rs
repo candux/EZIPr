@@ -437,17 +437,14 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    /// Create a sequential compositor for this resource.
+    ///
+    /// A static resource yields one full-canvas source frame and then ends.
     pub fn compositor(&self, output: PixelFormat) -> Result<crate::Compositor<'_, 'a>> {
-        if self.info.kind != ResourceKind::Animation {
-            return Err(Error::new(
-                ErrorKind::InvalidAnimation,
-                "a compositor requires an animated resource",
-            ));
-        }
         crate::Compositor::new(self, output)
     }
 
-    /// Compose a frame by replaying the animation from its beginning.
+    /// Compose a frame by replaying the resource from its beginning.
     ///
     /// Repeated random access is quadratic; use [`Self::compositor`] when
     /// consuming frames sequentially.

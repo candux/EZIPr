@@ -213,3 +213,31 @@ fn decodes_stored_frames_into_caller_buffers() {
     assert_eq!(&destination[..written], expected_rgb());
     assert_eq!(&destination[written..], &[0x55; 4]);
 }
+
+#[test]
+fn composes_static_resources_as_one_frame() {
+    for data in [
+        include_bytes!("fixtures/static/ezip-rgb888.bin").as_slice(),
+        include_bytes!("fixtures/static/pixel-argb888.bin").as_slice(),
+    ] {
+        let decoder = Decoder::new(data).unwrap();
+        let direct = decoder.decode_frame(0, PixelFormat::Rgba8).unwrap();
+        let composed = decoder
+            .decode_composited_frame(0, PixelFormat::Rgba8)
+            .unwrap();
+        assert_eq!(composed, direct);
+
+        let mut destination = vec![0; decoder.frame_buffer_size(0, PixelFormat::Rgba8).unwrap()];
+        let written = decoder
+            .decode_composited_frame_into(0, PixelFormat::Rgba8, &mut destination)
+            .unwrap();
+        assert_eq!(written, destination.len());
+        assert_eq!(destination, direct.pixels());
+
+        let mut compositor = decoder.compositor(PixelFormat::Rgba8).unwrap();
+        assert_eq!(compositor.next_frame().unwrap().unwrap(), direct);
+        assert!(compositor.next_frame().unwrap().is_none());
+        compositor.reset();
+        assert!(compositor.next_frame().unwrap().is_some());
+    }
+}
