@@ -184,12 +184,16 @@ impl<'a> Decoder<'a> {
                     let pixel_bytes = pixel_count.checked_mul(bpp)?;
                     (payload.len() == pixel_bytes + 4).then_some((bpp, pixel_bytes))
                 });
+                let inferred = exact.is_none();
                 let selected = exact.or_else(|| {
                     (options.mode == DecodeMode::Diagnostic).then(|| {
-                        candidate_bpp.iter().find_map(|&bpp| {
-                            let pixel_bytes = pixel_count.checked_mul(bpp)?;
-                            (payload.len() >= pixel_bytes).then_some((bpp, pixel_bytes))
-                        })
+                        candidate_bpp
+                            .iter()
+                            .filter_map(|&bpp| {
+                                let pixel_bytes = pixel_count.checked_mul(bpp)?;
+                                (payload.len() >= pixel_bytes).then_some((bpp, pixel_bytes))
+                            })
+                            .min_by_key(|&(_, pixel_bytes)| payload.len().abs_diff(pixel_bytes))
                     })?
                 });
                 let (bpp, pixel_bytes) = selected.ok_or_else(|| {
@@ -209,6 +213,16 @@ impl<'a> Decoder<'a> {
                 }
                 let storage = StorageFormat::from_alpha_and_bpp(pixel_has_alpha, bpp)?;
                 let mut warnings = Vec::new();
+                if inferred {
+                    warnings.push(Warning::new(
+                        crate::WarningKind::MetadataMismatch,
+                        format!(
+                            "inferred {storage:?} from noncanonical {}-byte PIXEL payload; expected {} bytes including CRC-32",
+                            payload.len(),
+                            pixel_bytes + 4
+                        ),
+                    ));
+                }
                 let pixels = &payload[..pixel_bytes];
                 if payload.len() >= pixel_bytes + 4 {
                     let stored = u32::from_le_bytes(

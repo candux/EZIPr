@@ -418,22 +418,23 @@ impl HuffmanTree {
                 "invalid shared-Huffman code lengths",
             ));
         }
-        let mut counts = vec![0_u16; max_length as usize + 1];
+        let mut counts = vec![0_u32; max_length as usize + 1];
         for &length in lengths {
             if length > 0 {
                 counts[length as usize] = counts[length as usize].saturating_add(1);
             }
         }
         let mut next_code = vec![0_u16; max_length as usize + 1];
-        let mut code = 0_u16;
+        let mut code = 0_u32;
         for bits in 1..=max_length as usize {
-            code = code
-                .checked_add(counts[bits - 1])
-                .and_then(|value| value.checked_shl(1))
-                .ok_or_else(|| {
-                    Error::new(ErrorKind::InvalidCompression, "Huffman code overflow")
-                })?;
-            next_code[bits] = code;
+            code = (code + counts[bits - 1]) << 1;
+            if code + counts[bits] > 1_u32 << bits {
+                return Err(Error::new(
+                    ErrorKind::InvalidCompression,
+                    "over-subscribed shared-Huffman code lengths",
+                ));
+            }
+            next_code[bits] = code as u16;
         }
         let mut symbols = HashMap::new();
         for (symbol, &length) in lengths.iter().enumerate() {
@@ -442,7 +443,7 @@ impl HuffmanTree {
             }
             let code = next_code[length as usize];
             symbols.insert((length, code), symbol as u16);
-            next_code[length as usize] = code.saturating_add(1);
+            next_code[length as usize] = code + 1;
         }
         Ok(Self {
             symbols,
@@ -798,5 +799,13 @@ mod tests {
         assert_eq!(decoded.warnings.len(), 2);
         assert_eq!(decoded.warnings[0].kind(), WarningKind::PartialData);
         assert_eq!(decoded.warnings[1].kind(), WarningKind::UnknownFilter);
+    }
+
+    #[test]
+    fn rejects_over_subscribed_huffman_lengths() {
+        let error = HuffmanTree::from_lengths(&[1, 1, 1]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::InvalidCompression);
+        assert!(error.message().contains("over-subscribed"));
+        assert!(HuffmanTree::from_lengths(&[1, 1]).is_ok());
     }
 }

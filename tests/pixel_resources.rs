@@ -1,6 +1,6 @@
 use ezipr::{
-    DecodeLimits, Decoder, ErrorKind, PixelFormat, ResourceFormat, ResourceHeader, ResourceKind,
-    StorageFormat,
+    DecodeLimits, DecodeMode, DecodeOptions, Decoder, ErrorKind, PixelFormat, ResourceFormat,
+    ResourceHeader, ResourceKind, StorageFormat, WarningKind,
 };
 
 fn resource(format: ResourceFormat, width: u16, height: u16, pixels: &[u8]) -> Vec<u8> {
@@ -118,6 +118,27 @@ fn decoded_byte_limit_excludes_the_pixel_checksum() {
             .unwrap_err()
             .kind(),
         ErrorKind::LimitExceeded
+    );
+}
+
+#[test]
+fn diagnostic_mode_infers_trailerless_rgb888_without_changing_layout() {
+    let mut data = include_bytes!("fixtures/static/pixel-rgb888.bin").to_vec();
+    data.truncate(data.len() - 4);
+    assert!(Decoder::new(&data).is_err());
+
+    let options = DecodeOptions::new().mode(DecodeMode::Diagnostic);
+    let decoder = Decoder::with_options(&data, options).unwrap();
+    assert_eq!(decoder.info().storage_format(), StorageFormat::Rgb888);
+    assert_eq!(decoder.warnings().len(), 2);
+    assert_eq!(decoder.warnings()[0].kind(), WarningKind::MetadataMismatch);
+    assert!(decoder.warnings()[0].message().contains("inferred Rgb888"));
+    assert_eq!(decoder.warnings()[1].kind(), WarningKind::MissingChecksum);
+
+    let image = decoder.decode_frame(0, PixelFormat::Rgba8).unwrap();
+    assert_eq!(
+        &image.pixels()[..12],
+        &[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255]
     );
 }
 
