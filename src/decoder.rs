@@ -1,4 +1,5 @@
 use crate::pixels::decode_storage_pixels;
+use crate::stream::{inflate_stream, unfilter};
 use crate::{
     DecodedImage, Error, ErrorKind, PixelFormat, ResourceFormat, ResourceHeader, ResourceKind,
     Result, StorageFormat, Warning,
@@ -126,6 +127,7 @@ impl ResourceInfo {
 #[derive(Debug)]
 enum Payload<'a> {
     Pixel(&'a [u8]),
+    Ezip(Vec<u8>),
 }
 
 /// Parsed image resource borrowing its encoded bytes.
@@ -165,11 +167,8 @@ impl<'a> Decoder<'a> {
                         "PIXEL payload exceeds configured decoded-byte limit",
                     ));
                 }
-                let candidate_bpp: &[usize] = if header.format().has_alpha() {
-                    &[3, 4]
-                } else {
-                    &[2, 3]
-                };
+                let pixel_has_alpha = header.format() == ResourceFormat::PixelWithAlpha;
+                let candidate_bpp: &[usize] = if pixel_has_alpha { &[3, 4] } else { &[2, 3] };
                 let exact = candidate_bpp.iter().find_map(|&bpp| {
                     let pixel_bytes = pixel_count.checked_mul(bpp)?;
                     (payload.len() == pixel_bytes + 4).then_some((bpp, pixel_bytes))
@@ -191,7 +190,7 @@ impl<'a> Decoder<'a> {
                         ),
                     )
                 })?;
-                let storage = StorageFormat::from_alpha_and_bpp(header.format().has_alpha(), bpp)?;
+                let storage = StorageFormat::from_alpha_and_bpp(pixel_has_alpha, bpp)?;
                 let mut warnings = Vec::new();
                 let pixels = &payload[..pixel_bytes];
                 if payload.len() >= pixel_bytes + 4 {
@@ -249,10 +248,87 @@ impl<'a> Decoder<'a> {
                     warnings,
                 })
             }
-            ResourceKind::Ezip => Err(Error::new(
-                ErrorKind::UnsupportedFormat,
-                "compressed eZIP decoding is not available yet",
-            )),
+            ResourceKind::Ezip => {
+                let stream_header = crate::StreamHeader::parse(payload)?;
+                let mut warnings = Vec::new();
+                if (stream_header.width(), stream_header.height())
+                    != (header.width(), header.height())
+                {
+                    let message = format!(
+                        "resource dimensions {}x{} differ from eZIP stream dimensions {}x{}",
+                        header.width(),
+                        header.height(),
+                        stream_header.width(),
+                        stream_header.height()
+                    );
+                    if options.mode == DecodeMode::Strict {
+                        return Err(Error::new(ErrorKind::InvalidDimensions, message));
+                    }
+                    warnings.push(Warning::new(crate::WarningKind::MetadataMismatch, message));
+                }
+                let storage = stream_header.storage_format()?;
+                let outer_matches = match header.format() {
+                    ResourceFormat::Ezip => storage != StorageFormat::Argb565,
+                    ResourceFormat::EzipArgb565 => storage == StorageFormat::Argb565,
+                    ResourceFormat::Pixel | ResourceFormat::PixelWithAlpha => unreachable!(),
+                };
+                if !outer_matches {
+                    let message = format!(
+                        "resource format {:?} does not match stream storage format {storage:?}",
+                        header.format()
+                    );
+                    if options.mode == DecodeMode::Strict {
+                        return Err(Error::new(ErrorKind::InvalidPixelLayout, message));
+                    }
+                    warnings.push(Warning::new(crate::WarningKind::MetadataMismatch, message));
+                }
+                let expected_bit_depth = match storage {
+                    StorageFormat::Rgb565 => 16,
+                    StorageFormat::Argb565 => 24,
+                    StorageFormat::Rgb888 | StorageFormat::Argb888 => 8,
+                };
+                if stream_header.bit_depth() != expected_bit_depth {
+                    let message = format!(
+                        "eZIP bit depth {} does not match stream storage format {storage:?}",
+                        stream_header.bit_depth()
+                    );
+                    if options.mode == DecodeMode::Strict {
+                        return Err(Error::new(ErrorKind::InvalidPixelLayout, message));
+                    }
+                    warnings.push(Warning::new(crate::WarningKind::MetadataMismatch, message));
+                }
+                let bytes_per_pixel = storage.bytes_per_pixel();
+                let inflated = inflate_stream(
+                    payload,
+                    stream_header,
+                    options.limits.max_decoded_bytes,
+                    options.mode,
+                    &mut warnings,
+                )?;
+                let decoded = unfilter(
+                    &inflated.bytes,
+                    width,
+                    height,
+                    bytes_per_pixel,
+                    inflated.block_rows,
+                    stream_header.has_row_filters(),
+                    options.mode,
+                )?;
+                warnings.extend(decoded.warnings);
+                Ok(Self {
+                    info: ResourceInfo {
+                        kind: ResourceKind::Ezip,
+                        format: header.format(),
+                        storage_format: storage,
+                        width,
+                        height,
+                        frame_count: 1,
+                    },
+                    payload: Payload::Ezip(decoded.pixels),
+                    options,
+                    warnings,
+                })
+            }
             ResourceKind::Animation => unreachable!("no static resource ID maps to animation"),
         }
     }
@@ -277,7 +353,10 @@ impl<'a> Decoder<'a> {
             )
             .in_frame(index));
         }
-        let Payload::Pixel(payload) = self.payload;
+        let payload = match &self.payload {
+            Payload::Pixel(payload) => *payload,
+            Payload::Ezip(payload) => payload,
+        };
         let pixels = decode_storage_pixels(
             payload,
             self.info.width,

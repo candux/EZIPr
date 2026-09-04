@@ -19,8 +19,8 @@ Known format identifiers are:
 
 | ID | Payload |
 |---:|---|
-| 1 | eZIP without alpha |
-| 2 | eZIP with alpha |
+| 1 | eZIP using RGB565, RGB888, or ARGB888 storage |
+| 2 | eZIP using ARGB565 storage |
 | 4 | PIXEL without alpha |
 | 5 | PIXEL with alpha |
 
@@ -34,3 +34,54 @@ fixture-confirmed but absent from the prose format description.
 All multi-byte pixel values are little-endian. RGB888 is stored as B, G, R.
 ARGB565 is stored as a little-endian RGB565 word followed by alpha. ARGB888 is
 stored as B, G, R, A.
+
+## Standard eZIP stream
+
+Compressed resources place a 16-byte stream header after the resource header.
+Multi-byte fields in this inner header are big-endian.
+
+| Offset | Size | Meaning | Evidence |
+|---:|---:|---|---|
+| 0 | 4 | complete inner stream size | fixture-confirmed |
+| 4 | 1 | control flags | fixture-confirmed; individual bits partly inferred |
+| 5 | 1 | component/packed bit depth | fixture-confirmed |
+| 6 | 1 | rows per independently filtered block | fixture-confirmed |
+| 7 | 1 | flags | fixture-confirmed; meaning unknown |
+| 8 | 2 | width | fixture-confirmed |
+| 10 | 2 | height | fixture-confirmed |
+| 12 | 1 | low nibble is filter mode | fixture-confirmed |
+| 13 | 3 | reserved | fixture-confirmed |
+
+For standard streams, the header is followed by a raw DEFLATE stream and a
+big-endian Adler-32 of the decompressed bytes. Control bit `0x40` identifies a
+distinct shared-Huffman/block representation.
+
+Filter mode 1 stores pixels directly. Other observed modes add one PNG filter
+byte to each row. Filters use the PNG None, Sub, Up, Average, and Paeth rules.
+The preceding row is reset to zero at each `block_rows` boundary.
+
+Control bytes use the low nibble as a color type: 2, 6, 8, and 12 mean RGB888,
+ARGB888, RGB565, and ARGB565 respectively. Standard streams use
+`0x10 | color_type`; shared-Huffman streams use `0x40 | color_type`. The depth
+byte is 8 for RGB888 and ARGB888, 16 for packed RGB565, and 24 for ARGB565.
+
+## Shared-Huffman stream
+
+The shared-Huffman representation is fixture-confirmed using source images
+owned by this project. Its declared inner size excludes a four-byte
+little-endian CRC-32 trailer. The CRC covers the entire declared inner stream,
+including its 16-byte header.
+
+After the header are a big-endian 16-bit block-row count, a big-endian 16-bit
+block count, one four-byte offset per block, and the bit stream. A single
+dynamic Huffman table precedes all aligned DEFLATE-like blocks. Literal,
+length, and distance coding follows DEFLATE, while each block begins on a
+four-byte boundary and reuses the shared table.
+
+EZIPr decodes this representation but emits the simpler standard raw-DEFLATE
+form.
+
+The static encoder can either write adaptive PNG row filters or filterless
+scanlines. Its raw DEFLATE output is deterministic for the locked dependency
+graph, though byte-for-byte equality with another encoder is neither required
+nor expected.

@@ -17,7 +17,7 @@ pub enum ResourceKind {
 #[non_exhaustive]
 pub enum ResourceFormat {
     Ezip = 1,
-    EzipWithAlpha = 2,
+    EzipArgb565 = 2,
     Pixel = 4,
     PixelWithAlpha = 5,
 }
@@ -26,7 +26,7 @@ impl ResourceFormat {
     pub fn from_id(id: u8) -> Result<Self> {
         match id {
             1 => Ok(Self::Ezip),
-            2 => Ok(Self::EzipWithAlpha),
+            2 => Ok(Self::EzipArgb565),
             4 => Ok(Self::Pixel),
             5 => Ok(Self::PixelWithAlpha),
             _ => Err(Error::new(
@@ -42,13 +42,21 @@ impl ResourceFormat {
 
     pub const fn kind(self) -> ResourceKind {
         match self {
-            Self::Ezip | Self::EzipWithAlpha => ResourceKind::Ezip,
+            Self::Ezip | Self::EzipArgb565 => ResourceKind::Ezip,
             Self::Pixel | Self::PixelWithAlpha => ResourceKind::Pixel,
         }
     }
 
-    pub const fn has_alpha(self) -> bool {
-        matches!(self, Self::EzipWithAlpha | Self::PixelWithAlpha)
+    /// Alpha implication of the outer format, if it is unambiguous.
+    ///
+    /// Generic eZIP resources return `None` because their inner color type can
+    /// be RGB565, RGB888, or ARGB888.
+    pub const fn alpha_hint(self) -> Option<bool> {
+        match self {
+            Self::Ezip => None,
+            Self::EzipArgb565 | Self::PixelWithAlpha => Some(true),
+            Self::Pixel => Some(false),
+        }
     }
 }
 

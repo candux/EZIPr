@@ -17,7 +17,7 @@ fn resource(format: ResourceFormat, width: u16, height: u16, pixels: &[u8]) -> V
 fn parses_resource_header_and_ignores_reserved_bits() {
     let word = 2_u32 | (0b10101 << 5) | (485 << 10) | (520 << 21);
     let header = ResourceHeader::parse(&word.to_le_bytes()).unwrap();
-    assert_eq!(header.format(), ResourceFormat::EzipWithAlpha);
+    assert_eq!(header.format(), ResourceFormat::EzipArgb565);
     assert_eq!(header.reserved(), 0b10101);
     assert_eq!(header.width(), 485);
     assert_eq!(header.height(), 520);

@@ -6,18 +6,46 @@ height = 4
 file = "pixel-rgb565.bin"
 kind = "pixel"
 storage = "rgb565"
+source = "source-rgb.png"
 
 [[resources]]
 file = "pixel-rgb888.bin"
 kind = "pixel"
 storage = "rgb888"
+source = "source-rgb.png"
 
 [[resources]]
 file = "pixel-argb565.bin"
 kind = "pixel"
 storage = "argb565"
+source = "source-rgba.png"
 
 [[resources]]
 file = "pixel-argb888.bin"
 kind = "pixel"
 storage = "argb888"
+source = "source-rgba.png"
+
+[[resources]]
+file = "ezip-rgb565.bin"
+kind = "ezip"
+storage = "rgb565"
+source = "source-rgb.png"
+
+[[resources]]
+file = "ezip-rgb888.bin"
+kind = "ezip"
+storage = "rgb888"
+source = "source-rgb.png"
+
+[[resources]]
+file = "ezip-argb565.bin"
+kind = "ezip"
+storage = "argb565"
+source = "source-rgba.png"
+
+[[resources]]
+file = "ezip-argb888.bin"
+kind = "ezip"
+storage = "argb888"
+source = "source-rgba.png"
