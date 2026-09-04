@@ -49,3 +49,11 @@ file = "ezip-argb888.bin"
 kind = "ezip"
 storage = "argb888"
 source = "source-rgba.png"
+
+[[resources]]
+file = "ezip-rgb888-multiblock.bin"
+kind = "ezip"
+storage = "rgb888"
+source = "source-multiblock.png"
+width = 8
+height = 70

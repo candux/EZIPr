@@ -40,6 +40,20 @@ fn expected_rgba() -> Vec<u8> {
     expected
 }
 
+fn expected_multiblock_rgb() -> Vec<u8> {
+    let mut expected = Vec::with_capacity(8 * 70 * 3);
+    for y in 0..70 {
+        for x in 0..8 {
+            expected.extend_from_slice(&[
+                (x * 37 + y * 11 + (y / 32) * 53) as u8,
+                (x * 17 + y * 29) as u8,
+                (x * 97 + y * 7) as u8,
+            ]);
+        }
+    }
+    expected
+}
+
 #[test]
 fn parses_shared_huffman_stream_header() {
     let data = include_bytes!("fixtures/static/ezip-rgb565.bin");
@@ -139,4 +153,18 @@ fn validates_shared_huffman_crc32() {
     let decoder = Decoder::with_options(&data, options).unwrap();
     assert_eq!(decoder.warnings().len(), 1);
     assert_eq!(decoder.warnings()[0].kind(), WarningKind::ChecksumMismatch);
+}
+
+#[test]
+fn decodes_shared_huffman_across_multiple_row_blocks() {
+    let data = include_bytes!("fixtures/static/ezip-rgb888-multiblock.bin");
+    let stream = StreamHeader::parse(&data[4..]).unwrap();
+    assert!(stream.uses_shared_huffman());
+    assert_eq!(stream.block_rows(), 32);
+    assert_eq!((stream.width(), stream.height()), (8, 70));
+
+    let decoder = Decoder::new(data).unwrap();
+    let image = decoder.decode_frame(0, PixelFormat::Rgb8).unwrap();
+    assert_eq!((image.width(), image.height()), (8, 70));
+    assert_eq!(image.pixels(), expected_multiblock_rgb());
 }
