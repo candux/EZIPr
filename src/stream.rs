@@ -21,7 +21,7 @@ const CODE_LENGTH_ORDER: [usize; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
 
-/// Header preceding a standard raw-DEFLATE eZIP stream.
+/// Common header preceding static and animated eZIP stream data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StreamHeader {
     data_size: u32,
@@ -32,6 +32,7 @@ pub struct StreamHeader {
     width: u16,
     height: u16,
     filter_mode: u8,
+    palette_count: u8,
 }
 
 impl StreamHeader {
@@ -63,6 +64,7 @@ impl StreamHeader {
             width,
             height,
             filter_mode: header[12] & 0x0f,
+            palette_count: header[13],
         })
     }
 
@@ -103,7 +105,15 @@ impl StreamHeader {
     }
 
     pub const fn uses_shared_huffman(self) -> bool {
-        self.control & 0x40 != 0
+        self.control & 0xf0 == 0x40
+    }
+
+    pub const fn is_animation(self) -> bool {
+        self.control & 0xf0 == 0x50
+    }
+
+    pub const fn palette_count(self) -> u8 {
+        self.palette_count
     }
 
     pub fn storage_format(self) -> Result<StorageFormat> {

@@ -85,3 +85,39 @@ The static encoder can either write adaptive PNG row filters or filterless
 scanlines. Its raw DEFLATE output is deterministic for the locked dependency
 graph, though byte-for-byte equality with another encoder is neither required
 nor expected.
+
+## eZIP-A animation
+
+Animation streams use control high nibble `0x50`. Like shared-Huffman static
+streams, their declared inner size excludes a little-endian CRC-32 over the
+declared inner bytes. The 16-byte stream header is followed by an optional
+four-byte-per-entry palette, an eight-byte animation control, and a frame
+offset table. Frame and play counts and all offsets are big-endian 32-bit
+values. A play count of zero means infinite repetition.
+
+Frame offsets are relative to the beginning of the inner stream. Each packed
+30-byte frame header contains these big-endian fields:
+
+| Size | Meaning |
+|---:|---|
+| 4 | sequence number |
+| 4 | frame width |
+| 4 | frame height |
+| 4 | canvas x offset |
+| 4 | canvas y offset |
+| 2 | delay numerator |
+| 2 | delay denominator; zero means 100 |
+| 1 | disposal operation |
+| 1 | blend operation |
+| 2 | compressed-size high half |
+| 2 | compressed-size low half |
+
+The header is followed by a raw DEFLATE payload and a big-endian Adler-32 of
+the decompressed filtered frame. Intermediate records are padded so the next
+frame header begins at a four-byte-aligned offset. Disposal values 0, 1, and 2
+mean none, background, and previous; blend values 0 and 1 mean source and over.
+
+The container layout, frame fields, checksums, alignment, timing, rectangle,
+disposal, and blend values are confirmed by the project-owned controlled
+animation fixture. Palette serialization remains recognized but unsupported
+until a fixture establishes its byte semantics.

@@ -1,0 +1,573 @@
+use crate::stream::unfilter;
+use crate::{
+    DecodeLimits, DecodeMode, DecodedImage, Decoder, Error, ErrorKind, PixelFormat, Result,
+    StorageFormat, StreamHeader, Warning, WarningKind,
+};
+
+const ANIMATION_HEADER_LEN: usize = 16;
+const ANIMATION_CONTROL_LEN: usize = 8;
+const FRAME_HEADER_LEN: usize = 30;
+
+/// How a displayed frame region is treated before the following frame.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DisposalMethod {
+    #[default]
+    None,
+    Background,
+    Previous,
+}
+
+/// How a frame is combined with the existing canvas.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum BlendMode {
+    #[default]
+    Source,
+    Over,
+}
+
+/// Animation repetition behavior.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Repeat {
+    Infinite,
+    Finite(u32),
+}
+
+/// Metadata for one stored animation frame rectangle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameInfo {
+    sequence: u32,
+    width: u32,
+    height: u32,
+    x_offset: u32,
+    y_offset: u32,
+    delay_numerator: u16,
+    delay_denominator: u16,
+    disposal: DisposalMethod,
+    blend: BlendMode,
+}
+
+impl FrameInfo {
+    pub const fn sequence(self) -> u32 {
+        self.sequence
+    }
+
+    pub const fn width(self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(self) -> u32 {
+        self.height
+    }
+
+    pub const fn x_offset(self) -> u32 {
+        self.x_offset
+    }
+
+    pub const fn y_offset(self) -> u32 {
+        self.y_offset
+    }
+
+    pub const fn delay_numerator(self) -> u16 {
+        self.delay_numerator
+    }
+
+    pub const fn delay_denominator(self) -> u16 {
+        self.delay_denominator
+    }
+
+    pub const fn effective_delay_denominator(self) -> u16 {
+        if self.delay_denominator == 0 {
+            100
+        } else {
+            self.delay_denominator
+        }
+    }
+
+    pub const fn disposal(self) -> DisposalMethod {
+        self.disposal
+    }
+
+    pub const fn blend(self) -> BlendMode {
+        self.blend
+    }
+
+    pub(crate) const fn still(width: u32, height: u32) -> Self {
+        Self {
+            sequence: 0,
+            width,
+            height,
+            x_offset: 0,
+            y_offset: 0,
+            delay_numerator: 0,
+            delay_denominator: 0,
+            disposal: DisposalMethod::None,
+            blend: BlendMode::Source,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AnimationFrame {
+    pub info: FrameInfo,
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub(crate) struct AnimationData {
+    pub repeat: Repeat,
+    pub frames: Vec<AnimationFrame>,
+}
+
+pub(crate) fn parse_animation(
+    stream: &[u8],
+    header: StreamHeader,
+    storage: StorageFormat,
+    mode: DecodeMode,
+    limits: DecodeLimits,
+    warnings: &mut Vec<Warning>,
+) -> Result<AnimationData> {
+    validate_container_crc(stream, header, mode, warnings)?;
+    let declared = header.data_size() as usize;
+    let palette_bytes = usize::from(header.palette_count())
+        .checked_mul(4)
+        .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "palette size overflow"))?;
+    if palette_bytes != 0 {
+        return Err(Error::new(
+            ErrorKind::UnsupportedFormat,
+            "palette animation decoding requires a verified palette fixture",
+        ));
+    }
+    let control_offset = ANIMATION_HEADER_LEN + palette_bytes;
+    let control = stream
+        .get(control_offset..control_offset + ANIMATION_CONTROL_LEN)
+        .ok_or_else(|| Error::new(ErrorKind::TruncatedData, "animation control is truncated"))?;
+    let frame_count = u32::from_be_bytes(control[0..4].try_into().expect("fixed-size field"));
+    let play_count = u32::from_be_bytes(control[4..8].try_into().expect("fixed-size field"));
+    let frame_count = usize::try_from(frame_count)
+        .map_err(|_| Error::new(ErrorKind::LimitExceeded, "frame count does not fit usize"))?;
+    if frame_count == 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidAnimation,
+            "animation contains no frames",
+        ));
+    }
+    if frame_count > limits.frame_limit() {
+        return Err(Error::new(
+            ErrorKind::LimitExceeded,
+            format!("animation has {frame_count} frames, exceeding the configured limit"),
+        ));
+    }
+    let table_offset = control_offset + ANIMATION_CONTROL_LEN;
+    let table_len = frame_count
+        .checked_mul(4)
+        .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "frame table size overflow"))?;
+    let table = stream
+        .get(table_offset..table_offset + table_len)
+        .ok_or_else(|| Error::new(ErrorKind::TruncatedData, "frame-offset table is truncated"))?;
+    let mut offsets = Vec::with_capacity(frame_count);
+    for (index, bytes) in table.chunks_exact(4).enumerate() {
+        let offset = u32::from_be_bytes(bytes.try_into().expect("fixed-size field")) as usize;
+        if offset % 4 != 0 || offset < table_offset + table_len || offset >= declared {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                format!("animation frame {index} has invalid offset {offset}"),
+            )
+            .in_frame(index)
+            .at_offset(table_offset + index * 4));
+        }
+        if offsets.last().is_some_and(|previous| *previous >= offset) {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                "animation frame offsets are not strictly increasing",
+            )
+            .in_frame(index));
+        }
+        offsets.push(offset);
+    }
+
+    let mut frames = Vec::with_capacity(frame_count);
+    let mut total_decoded = 0_usize;
+    for (index, &offset) in offsets.iter().enumerate() {
+        let frame_end = offsets.get(index + 1).copied().unwrap_or(declared);
+        let raw_header = stream
+            .get(offset..offset + FRAME_HEADER_LEN)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::TruncatedData,
+                    "animation frame header is truncated",
+                )
+                .in_frame(index)
+                .at_offset(offset)
+            })?;
+        let sequence = be_u32(raw_header, 0);
+        let width = be_u32(raw_header, 4);
+        let height = be_u32(raw_header, 8);
+        let x_offset = be_u32(raw_header, 12);
+        let y_offset = be_u32(raw_header, 16);
+        let delay_numerator = be_u16(raw_header, 20);
+        let delay_denominator = be_u16(raw_header, 22);
+        let disposal = match raw_header[24] {
+            0 => DisposalMethod::None,
+            1 => DisposalMethod::Background,
+            2 => DisposalMethod::Previous,
+            value => {
+                return Err(Error::new(
+                    ErrorKind::InvalidAnimation,
+                    format!("frame {index} has invalid disposal operation {value}"),
+                )
+                .in_frame(index)
+                .at_offset(offset + 24));
+            }
+        };
+        let blend = match raw_header[25] {
+            0 => BlendMode::Source,
+            1 => BlendMode::Over,
+            value => {
+                return Err(Error::new(
+                    ErrorKind::InvalidAnimation,
+                    format!("frame {index} has invalid blend operation {value}"),
+                )
+                .in_frame(index)
+                .at_offset(offset + 25));
+            }
+        };
+        let compressed_size =
+            ((u32::from(be_u16(raw_header, 26))) << 16) | u32::from(be_u16(raw_header, 28));
+        let compressed_size = compressed_size as usize;
+        if width == 0
+            || height == 0
+            || x_offset
+                .checked_add(width)
+                .is_none_or(|right| right > u32::from(header.width()))
+            || y_offset
+                .checked_add(height)
+                .is_none_or(|bottom| bottom > u32::from(header.height()))
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidDimensions,
+                format!(
+                    "frame {index} rectangle {width}x{height}+{x_offset}+{y_offset} exceeds the canvas"
+                ),
+            )
+            .in_frame(index));
+        }
+        if sequence != index as u32 {
+            let message = format!("frame table index {index} contains sequence {sequence}");
+            if mode == DecodeMode::Strict {
+                return Err(Error::new(ErrorKind::InvalidAnimation, message).in_frame(index));
+            }
+            warnings.push(Warning::new(WarningKind::MetadataMismatch, message).in_frame(index));
+        }
+        let compressed_offset = offset + FRAME_HEADER_LEN;
+        let checksum_offset = compressed_offset
+            .checked_add(compressed_size)
+            .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "frame size overflow"))?;
+        if checksum_offset
+            .checked_add(4)
+            .is_none_or(|end| end > frame_end)
+        {
+            return Err(Error::new(
+                ErrorKind::TruncatedData,
+                format!("frame {index} compressed payload or checksum is truncated"),
+            )
+            .in_frame(index)
+            .at_offset(compressed_offset));
+        }
+        let compressed = &stream[compressed_offset..checksum_offset];
+        let remaining = limits.decoded_byte_limit().saturating_sub(total_decoded);
+        let filtered = miniz_oxide::inflate::decompress_to_vec_with_limit(compressed, remaining)
+            .map_err(|error| {
+                let kind = if error.output.len() >= remaining {
+                    ErrorKind::LimitExceeded
+                } else {
+                    ErrorKind::InvalidCompression
+                };
+                Error::new(
+                    kind,
+                    format!("invalid animation frame DEFLATE stream: {error}"),
+                )
+                .in_frame(index)
+                .at_offset(compressed_offset)
+            })?;
+        let stored_checksum = u32::from_be_bytes(
+            stream[checksum_offset..checksum_offset + 4]
+                .try_into()
+                .expect("checksum slice length was checked"),
+        );
+        let calculated = miniz_oxide::mz_adler32_oxide(miniz_oxide::MZ_ADLER32_INIT, &filtered);
+        if stored_checksum != calculated {
+            let message = format!(
+                "frame {index} Adler-32 mismatch: stored {stored_checksum:08x}, calculated {calculated:08x}"
+            );
+            if mode == DecodeMode::Strict {
+                return Err(Error::new(ErrorKind::ChecksumMismatch, message)
+                    .in_frame(index)
+                    .at_offset(checksum_offset));
+            }
+            warnings.push(
+                Warning::new(WarningKind::ChecksumMismatch, message)
+                    .in_frame(index)
+                    .at_offset(checksum_offset),
+            );
+        }
+        let decoded = unfilter(
+            &filtered,
+            width,
+            height,
+            storage.bytes_per_pixel(),
+            header.block_rows(),
+            header.has_row_filters(),
+            mode,
+        )?;
+        warnings.extend(
+            decoded
+                .warnings
+                .into_iter()
+                .map(|warning| warning.in_frame(index)),
+        );
+        total_decoded = total_decoded
+            .checked_add(decoded.pixels.len())
+            .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "decoded size overflow"))?;
+        frames.push(AnimationFrame {
+            info: FrameInfo {
+                sequence,
+                width,
+                height,
+                x_offset,
+                y_offset,
+                delay_numerator,
+                delay_denominator,
+                disposal,
+                blend,
+            },
+            pixels: decoded.pixels,
+        });
+    }
+    Ok(AnimationData {
+        repeat: if play_count == 0 {
+            Repeat::Infinite
+        } else {
+            Repeat::Finite(play_count)
+        },
+        frames,
+    })
+}
+
+fn validate_container_crc(
+    stream: &[u8],
+    header: StreamHeader,
+    mode: DecodeMode,
+    warnings: &mut Vec<Warning>,
+) -> Result<()> {
+    let declared = header.data_size() as usize;
+    if declared > stream.len() {
+        return Err(Error::new(
+            ErrorKind::TruncatedData,
+            "animation is shorter than its declared size",
+        ));
+    }
+    let trailer_end = declared.saturating_add(4);
+    if trailer_end > stream.len() {
+        if mode == DecodeMode::Strict {
+            return Err(Error::new(
+                ErrorKind::TruncatedData,
+                "animation has no container CRC-32 trailer",
+            )
+            .at_offset(declared));
+        }
+        warnings.push(
+            Warning::new(
+                WarningKind::MissingChecksum,
+                "animation has no container CRC-32 trailer",
+            )
+            .at_offset(declared),
+        );
+        return Ok(());
+    }
+    let stored = u32::from_le_bytes(
+        stream[declared..trailer_end]
+            .try_into()
+            .expect("CRC slice length was checked"),
+    );
+    let calculated = crc32fast::hash(&stream[..declared]);
+    if stored != calculated {
+        let message =
+            format!("animation CRC-32 mismatch: stored {stored:08x}, calculated {calculated:08x}");
+        if mode == DecodeMode::Strict {
+            return Err(Error::new(ErrorKind::ChecksumMismatch, message).at_offset(declared));
+        }
+        warnings.push(Warning::new(WarningKind::ChecksumMismatch, message).at_offset(declared));
+    }
+    if stream.len() > trailer_end {
+        let message = format!(
+            "ignored {} bytes after the animation CRC-32",
+            stream.len() - trailer_end
+        );
+        if mode == DecodeMode::Strict {
+            return Err(Error::new(ErrorKind::InvalidAnimation, message).at_offset(trailer_end));
+        }
+        warnings.push(Warning::new(WarningKind::TrailingData, message).at_offset(trailer_end));
+    }
+    Ok(())
+}
+
+fn be_u16(data: &[u8], offset: usize) -> u16 {
+    u16::from_be_bytes(
+        data[offset..offset + 2]
+            .try_into()
+            .expect("frame header length was checked"),
+    )
+}
+
+fn be_u32(data: &[u8], offset: usize) -> u32 {
+    u32::from_be_bytes(
+        data[offset..offset + 4]
+            .try_into()
+            .expect("frame header length was checked"),
+    )
+}
+
+/// Stateful sequential animation compositor.
+#[derive(Debug)]
+pub struct Compositor<'decoder, 'data> {
+    decoder: &'decoder Decoder<'data>,
+    output: PixelFormat,
+    canvas: Vec<u8>,
+    next_index: usize,
+    previous_frame: Option<FrameInfo>,
+    restore_canvas: Option<Vec<u8>>,
+}
+
+impl<'decoder, 'data> Compositor<'decoder, 'data> {
+    pub(crate) fn new(decoder: &'decoder Decoder<'data>, output: PixelFormat) -> Result<Self> {
+        let canvas_len = (decoder.info().width() as usize)
+            .checked_mul(decoder.info().height() as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "canvas size overflow"))?;
+        Ok(Self {
+            decoder,
+            output,
+            canvas: vec![0; canvas_len],
+            next_index: 0,
+            previous_frame: None,
+            restore_canvas: None,
+        })
+    }
+
+    pub const fn next_index(&self) -> usize {
+        self.next_index
+    }
+
+    pub fn reset(&mut self) {
+        self.canvas.fill(0);
+        self.next_index = 0;
+        self.previous_frame = None;
+        self.restore_canvas = None;
+    }
+
+    pub fn next_frame(&mut self) -> Result<Option<DecodedImage>> {
+        if self.next_index >= self.decoder.info().frame_count() {
+            return Ok(None);
+        }
+        self.apply_previous_disposal();
+        let info = self.decoder.frame_info(self.next_index)?;
+        self.restore_canvas = if info.disposal == DisposalMethod::Previous {
+            Some(self.canvas.clone())
+        } else {
+            None
+        };
+        let frame = self
+            .decoder
+            .decode_frame(self.next_index, PixelFormat::Rgba8)?;
+        self.draw(info, frame.pixels());
+        self.previous_frame = Some(info);
+        self.next_index += 1;
+
+        let pixels = match self.output {
+            PixelFormat::Rgba8 => self.canvas.clone(),
+            PixelFormat::Rgb8 => self
+                .canvas
+                .chunks_exact(4)
+                .flat_map(|pixel| pixel[..3].iter().copied())
+                .collect(),
+        };
+        Ok(Some(DecodedImage::new(
+            self.decoder.info().width(),
+            self.decoder.info().height(),
+            self.output,
+            pixels,
+        )))
+    }
+
+    fn apply_previous_disposal(&mut self) {
+        let Some(previous) = self.previous_frame else {
+            return;
+        };
+        match previous.disposal {
+            DisposalMethod::None => {}
+            DisposalMethod::Background => clear_rectangle(
+                &mut self.canvas,
+                self.decoder.info().width() as usize,
+                previous,
+            ),
+            DisposalMethod::Previous => {
+                if let Some(restore) = self.restore_canvas.take() {
+                    self.canvas = restore;
+                }
+            }
+        }
+    }
+
+    fn draw(&mut self, info: FrameInfo, pixels: &[u8]) {
+        let canvas_width = self.decoder.info().width() as usize;
+        for y in 0..info.height as usize {
+            for x in 0..info.width as usize {
+                let source_index = (y * info.width as usize + x) * 4;
+                let destination_index =
+                    ((y + info.y_offset as usize) * canvas_width + x + info.x_offset as usize) * 4;
+                let source: [u8; 4] = pixels[source_index..source_index + 4]
+                    .try_into()
+                    .expect("decoded RGBA pixel");
+                if info.blend == BlendMode::Source {
+                    self.canvas[destination_index..destination_index + 4].copy_from_slice(&source);
+                } else {
+                    let destination: [u8; 4] = self.canvas
+                        [destination_index..destination_index + 4]
+                        .try_into()
+                        .expect("canvas RGBA pixel");
+                    self.canvas[destination_index..destination_index + 4]
+                        .copy_from_slice(&over(source, destination));
+                }
+            }
+        }
+    }
+}
+
+fn clear_rectangle(canvas: &mut [u8], canvas_width: usize, info: FrameInfo) {
+    for y in info.y_offset as usize..(info.y_offset + info.height) as usize {
+        let start = (y * canvas_width + info.x_offset as usize) * 4;
+        let end = start + info.width as usize * 4;
+        canvas[start..end].fill(0);
+    }
+}
+
+fn over(source: [u8; 4], destination: [u8; 4]) -> [u8; 4] {
+    let source_alpha = u32::from(source[3]);
+    let destination_alpha = u32::from(destination[3]);
+    let inverse = 255 - source_alpha;
+    let alpha_scaled = source_alpha * 255 + destination_alpha * inverse;
+    if alpha_scaled == 0 {
+        return [0; 4];
+    }
+    let mut output = [0; 4];
+    for channel in 0..3 {
+        let numerator = u32::from(source[channel]) * source_alpha * 255
+            + u32::from(destination[channel]) * destination_alpha * inverse;
+        output[channel] = ((numerator + alpha_scaled / 2) / alpha_scaled) as u8;
+    }
+    output[3] = ((alpha_scaled + 127) / 255) as u8;
+    output
+}

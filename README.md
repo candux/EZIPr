@@ -5,6 +5,10 @@ eZIP and PIXEL image resources. Static and animated images share one resource
 model, while the command-line program provides PNG, APNG, GIF, and frame
 manifest adapters.
 
+Static PIXEL, standard eZIP, shared-Huffman eZIP, and eZIP-A frame decoding are
+supported. Animated resources expose stored frame rectangles as well as a
+stateful sequential compositor for blend and disposal handling.
+
 The implementation is under active development. The checked-in tests define
 the currently supported format surface.
 

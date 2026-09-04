@@ -1,8 +1,8 @@
 use crate::pixels::decode_storage_pixels;
 use crate::stream::{inflate_stream, unfilter};
 use crate::{
-    DecodedImage, Error, ErrorKind, PixelFormat, ResourceFormat, ResourceHeader, ResourceKind,
-    Result, StorageFormat, Warning,
+    DecodedImage, Error, ErrorKind, FrameInfo, PixelFormat, Repeat, ResourceFormat, ResourceHeader,
+    ResourceKind, Result, StorageFormat, Warning,
 };
 
 /// Decoder behavior when recoverable inconsistencies are encountered.
@@ -53,6 +53,22 @@ impl DecodeLimits {
     pub fn max_decoded_bytes(mut self, bytes: usize) -> Self {
         self.max_decoded_bytes = bytes;
         self
+    }
+
+    pub const fn width_limit(self) -> u32 {
+        self.max_width
+    }
+
+    pub const fn height_limit(self) -> u32 {
+        self.max_height
+    }
+
+    pub const fn frame_limit(self) -> usize {
+        self.max_frames
+    }
+
+    pub const fn decoded_byte_limit(self) -> usize {
+        self.max_decoded_bytes
     }
 }
 
@@ -128,6 +144,7 @@ impl ResourceInfo {
 enum Payload<'a> {
     Pixel(&'a [u8]),
     Ezip(Vec<u8>),
+    Animation(crate::animation::AnimationData),
 }
 
 /// Parsed image resource borrowing its encoded bytes.
@@ -298,6 +315,30 @@ impl<'a> Decoder<'a> {
                     warnings.push(Warning::new(crate::WarningKind::MetadataMismatch, message));
                 }
                 let bytes_per_pixel = storage.bytes_per_pixel();
+                if stream_header.is_animation() {
+                    let animation = crate::animation::parse_animation(
+                        payload,
+                        stream_header,
+                        storage,
+                        options.mode,
+                        options.limits,
+                        &mut warnings,
+                    )?;
+                    let frame_count = animation.frames.len();
+                    return Ok(Self {
+                        info: ResourceInfo {
+                            kind: ResourceKind::Animation,
+                            format: header.format(),
+                            storage_format: storage,
+                            width,
+                            height,
+                            frame_count,
+                        },
+                        payload: Payload::Animation(animation),
+                        options,
+                        warnings,
+                    });
+                }
                 let inflated = inflate_stream(
                     payload,
                     stream_header,
@@ -345,30 +386,106 @@ impl<'a> Decoder<'a> {
         self.options
     }
 
-    pub fn decode_frame(&self, index: usize, output: PixelFormat) -> Result<DecodedImage> {
-        if index != 0 {
-            return Err(Error::new(
+    pub fn repeat(&self) -> Option<Repeat> {
+        match &self.payload {
+            Payload::Animation(animation) => Some(animation.repeat),
+            Payload::Pixel(_) | Payload::Ezip(_) => None,
+        }
+    }
+
+    pub fn frame_info(&self, index: usize) -> Result<FrameInfo> {
+        match &self.payload {
+            Payload::Animation(animation) => animation
+                .frames
+                .get(index)
+                .map(|frame| frame.info)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidOffset,
+                        format!("frame index {index} is outside the animation"),
+                    )
+                    .in_frame(index)
+                }),
+            Payload::Pixel(_) | Payload::Ezip(_) if index == 0 => {
+                Ok(FrameInfo::still(self.info.width, self.info.height))
+            }
+            Payload::Pixel(_) | Payload::Ezip(_) => Err(Error::new(
                 ErrorKind::InvalidOffset,
                 format!("frame index {index} is outside a one-frame resource"),
             )
+            .in_frame(index)),
+        }
+    }
+
+    pub fn compositor(&self, output: PixelFormat) -> Result<crate::Compositor<'_, 'a>> {
+        if self.info.kind != ResourceKind::Animation {
+            return Err(Error::new(
+                ErrorKind::InvalidAnimation,
+                "a compositor requires an animated resource",
+            ));
+        }
+        crate::Compositor::new(self, output)
+    }
+
+    /// Compose a frame by replaying the animation from its beginning.
+    ///
+    /// Repeated random access is quadratic; use [`Self::compositor`] when
+    /// consuming frames sequentially.
+    pub fn decode_composited_frame(
+        &self,
+        index: usize,
+        output: PixelFormat,
+    ) -> Result<DecodedImage> {
+        if index >= self.info.frame_count {
+            return Err(Error::new(
+                ErrorKind::InvalidOffset,
+                format!("frame index {index} is outside the animation"),
+            )
             .in_frame(index));
         }
-        let payload = match &self.payload {
-            Payload::Pixel(payload) => *payload,
-            Payload::Ezip(payload) => payload,
+        let mut compositor = self.compositor(output)?;
+        let mut image = None;
+        for _ in 0..=index {
+            image = compositor.next_frame()?;
+        }
+        image.ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidAnimation,
+                "animation ended before the requested frame",
+            )
+        })
+    }
+
+    pub fn decode_frame(&self, index: usize, output: PixelFormat) -> Result<DecodedImage> {
+        let (payload, width, height) = match &self.payload {
+            Payload::Pixel(payload) if index == 0 => (*payload, self.info.width, self.info.height),
+            Payload::Ezip(payload) if index == 0 => {
+                (payload.as_slice(), self.info.width, self.info.height)
+            }
+            Payload::Animation(animation) => {
+                let frame = animation.frames.get(index).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::InvalidOffset,
+                        format!("frame index {index} is outside the animation"),
+                    )
+                    .in_frame(index)
+                })?;
+                (
+                    frame.pixels.as_slice(),
+                    frame.info.width(),
+                    frame.info.height(),
+                )
+            }
+            Payload::Pixel(_) | Payload::Ezip(_) => {
+                return Err(Error::new(
+                    ErrorKind::InvalidOffset,
+                    format!("frame index {index} is outside a one-frame resource"),
+                )
+                .in_frame(index));
+            }
         };
-        let pixels = decode_storage_pixels(
-            payload,
-            self.info.width,
-            self.info.height,
-            self.info.storage_format,
-            output,
-        )?;
-        Ok(DecodedImage::new(
-            self.info.width,
-            self.info.height,
-            output,
-            pixels,
-        ))
+        let pixels =
+            decode_storage_pixels(payload, width, height, self.info.storage_format, output)?;
+        Ok(DecodedImage::new(width, height, output, pixels))
     }
 }

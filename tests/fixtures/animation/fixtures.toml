@@ -1,0 +1,10 @@
+origin = "external"
+source = "source-controlled.png"
+
+[[resources]]
+file = "controlled.bin"
+kind = "animation"
+storage = "argb565"
+width = 8
+height = 6
+frames = 3
