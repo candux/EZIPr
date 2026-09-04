@@ -189,6 +189,7 @@ struct LoadedAnimation {
     width: u32,
     height: u32,
     repeat: Repeat,
+    animated: bool,
     frames: Vec<LoadedFrame>,
 }
 
@@ -317,7 +318,7 @@ fn encode(args: EncodeArgs) -> CliResult<()> {
         }
         "png" | "apng" => {
             let loaded = load_png(&args.input)?;
-            if loaded.frames.len() == 1 {
+            if !loaded.animated {
                 let options = build_options(&args, None)?;
                 let frame = &loaded.frames[0];
                 Encoder::new(options).encode(frame.image()?)?
@@ -353,12 +354,13 @@ fn encode_manifest(args: &EncodeArgs) -> CliResult<ezipr::EncodedResource> {
         width: manifest.width,
         height: manifest.height,
         repeat,
+        animated: true,
         frames: Vec::with_capacity(manifest.frames.len()),
     };
     for entry in manifest.frames {
         let image_path = base.join(entry.file);
         let image = load_png(&image_path)?;
-        if image.frames.len() != 1 {
+        if image.animated || image.frames.len() != 1 {
             return Err(input_error(format!(
                 "manifest frame {} is animated",
                 image_path.display()
@@ -521,6 +523,7 @@ fn load_png(path: &Path) -> CliResult<LoadedAnimation> {
         width: canvas_width,
         height: canvas_height,
         repeat,
+        animated: animation.is_some(),
         frames,
     })
 }
@@ -592,6 +595,7 @@ fn load_gif(path: &Path) -> CliResult<LoadedAnimation> {
         width,
         height,
         repeat,
+        animated: true,
         frames,
     })
 }
@@ -630,10 +634,17 @@ fn write_apng(decoder: &Decoder<'_>, path: &Path) -> CliResult<()> {
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_animated(frame_count, repeat)?;
+    encoder.set_sep_def_img(true)?;
     let mut writer = encoder.write_header()?;
+    let default_size = (info.width() as usize)
+        .checked_mul(info.height() as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| input_error("APNG default image size overflow"))?;
+    writer.write_image_data(&vec![0; default_size])?;
     for index in 0..info.frame_count() {
         let frame_info = decoder.frame_info(index)?;
         let image = decoder.decode_frame(index, PixelFormat::Rgba8)?;
+        writer.reset_frame_position()?;
         writer.set_frame_dimension(frame_info.width(), frame_info.height())?;
         writer.set_frame_position(frame_info.x_offset(), frame_info.y_offset())?;
         writer.set_frame_delay(frame_info.delay_numerator(), frame_info.delay_denominator())?;

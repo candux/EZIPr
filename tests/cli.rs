@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ezipr::{Decoder, PixelFormat, Repeat, ResourceKind, StorageFormat};
+use ezipr::{
+    AnimationEncoder, Decoder, EncodeOptions, FrameView, ImageView, PixelFormat, Repeat,
+    ResourceKind, StorageFormat,
+};
 
 static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
 
@@ -185,4 +188,70 @@ fn malformed_input_fails_without_creating_output() {
     assert!(!result.status.success());
     assert!(!output.exists());
     assert!(String::from_utf8_lossy(&result.stderr).contains("error:"));
+}
+
+#[test]
+fn one_frame_apng_remains_an_animation() {
+    let directory = TestDirectory::new();
+    let apng = directory.join("one-frame.apng");
+    let resource = directory.join("one-frame.bin");
+    let file = fs::File::create(&apng).expect("create APNG");
+    let mut encoder = png::Encoder::new(file, 2, 2);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_animated(1, 0).expect("enable animation");
+    let mut writer = encoder.write_header().expect("write APNG header");
+    writer.set_frame_delay(1, 10).expect("set delay");
+    writer
+        .write_image_data(&[255, 0, 0, 255].repeat(4))
+        .expect("write APNG frame");
+    drop(writer);
+
+    assert_success(ezipr(&["encode", path_text(&apng), path_text(&resource)]));
+    let bytes = fs::read(resource).expect("read encoded animation");
+    let decoder = Decoder::new(&bytes).expect("decode one-frame animation");
+    assert_eq!(decoder.info().kind(), ResourceKind::Animation);
+    assert_eq!(decoder.info().frame_count(), 1);
+    assert_eq!(decoder.repeat(), Some(Repeat::Infinite));
+}
+
+#[test]
+fn apng_output_allows_a_frame_to_grow_after_a_shifted_frame() {
+    let directory = TestDirectory::new();
+    let resource = directory.join("growing.bin");
+    let apng = directory.join("growing.apng");
+    let round_trip = directory.join("growing-round-trip.bin");
+    let small_pixels = [0, 255, 0, 255].repeat(4);
+    let large_pixels = [0, 0, 255, 255].repeat(16);
+    let small = ImageView::new(2, 2, PixelFormat::Rgba8, 8, &small_pixels).unwrap();
+    let large = ImageView::new(4, 4, PixelFormat::Rgba8, 16, &large_pixels).unwrap();
+    let mut encoder =
+        AnimationEncoder::new(4, 4, Repeat::Finite(1), EncodeOptions::default()).unwrap();
+    encoder
+        .push_frame(FrameView::new(small, 2, 2, 1, 10))
+        .unwrap();
+    encoder
+        .push_frame(FrameView::new(large, 0, 0, 1, 5))
+        .unwrap();
+    fs::write(&resource, encoder.finish().unwrap().as_bytes()).expect("write animation");
+
+    assert_success(ezipr(&["decode", path_text(&resource), path_text(&apng)]));
+    assert_success(ezipr(&["encode", path_text(&apng), path_text(&round_trip)]));
+    let bytes = fs::read(round_trip).expect("read round-trip animation");
+    let decoder = Decoder::new(&bytes).expect("decode round-trip animation");
+    assert_eq!(decoder.info().frame_count(), 2);
+    assert_eq!(
+        (
+            decoder.frame_info(0).unwrap().x_offset(),
+            decoder.frame_info(0).unwrap().y_offset()
+        ),
+        (2, 2)
+    );
+    assert_eq!(
+        (
+            decoder.frame_info(1).unwrap().width(),
+            decoder.frame_info(1).unwrap().height()
+        ),
+        (4, 4)
+    );
 }

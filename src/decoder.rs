@@ -178,12 +178,6 @@ impl<'a> Decoder<'a> {
 
         match header.format().kind() {
             ResourceKind::Pixel => {
-                if payload.len() > options.limits.max_decoded_bytes {
-                    return Err(Error::new(
-                        ErrorKind::LimitExceeded,
-                        "PIXEL payload exceeds configured decoded-byte limit",
-                    ));
-                }
                 let pixel_has_alpha = header.format() == ResourceFormat::PixelWithAlpha;
                 let candidate_bpp: &[usize] = if pixel_has_alpha { &[3, 4] } else { &[2, 3] };
                 let exact = candidate_bpp.iter().find_map(|&bpp| {
@@ -207,6 +201,12 @@ impl<'a> Decoder<'a> {
                         ),
                     )
                 })?;
+                if pixel_bytes > options.limits.max_decoded_bytes {
+                    return Err(Error::new(
+                        ErrorKind::LimitExceeded,
+                        "PIXEL data exceeds configured decoded-byte limit",
+                    ));
+                }
                 let storage = StorageFormat::from_alpha_and_bpp(pixel_has_alpha, bpp)?;
                 let mut warnings = Vec::new();
                 let pixels = &payload[..pixel_bytes];

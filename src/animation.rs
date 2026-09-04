@@ -634,6 +634,20 @@ pub(crate) fn parse_animation(
                     .at_offset(checksum_offset),
             );
         }
+        let padding = &stream[checksum_offset + 4..frame_end];
+        if padding.len() > 3 || padding.iter().any(|&byte| byte != 0) {
+            let message = format!("frame {index} has invalid alignment padding");
+            if mode == DecodeMode::Strict {
+                return Err(Error::new(ErrorKind::InvalidAnimation, message)
+                    .in_frame(index)
+                    .at_offset(checksum_offset + 4));
+            }
+            warnings.push(
+                Warning::new(WarningKind::TrailingData, message)
+                    .in_frame(index)
+                    .at_offset(checksum_offset + 4),
+            );
+        }
         let decoded = unfilter(
             &filtered,
             width,

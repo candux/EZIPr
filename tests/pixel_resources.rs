@@ -107,6 +107,21 @@ fn enforces_decode_limits() {
 }
 
 #[test]
+fn decoded_byte_limit_excludes_the_pixel_checksum() {
+    let data = include_bytes!("fixtures/static/pixel-rgb565.bin");
+    let exact = DecodeLimits::new().max_decoded_bytes(8 * 4 * 2);
+    assert!(Decoder::with_options(data, ezipr::DecodeOptions::new().limits(exact)).is_ok());
+
+    let too_small = DecodeLimits::new().max_decoded_bytes(8 * 4 * 2 - 1);
+    assert_eq!(
+        Decoder::with_options(data, ezipr::DecodeOptions::new().limits(too_small))
+            .unwrap_err()
+            .kind(),
+        ErrorKind::LimitExceeded
+    );
+}
+
+#[test]
 fn validates_pixel_crc32() {
     let mut data = resource(ResourceFormat::Pixel, 1, 1, &hex("00 f8"));
     *data.last_mut().unwrap() ^= 0xff;

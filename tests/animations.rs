@@ -210,6 +210,19 @@ fn malformed_offsets_return_errors_without_panicking() {
 }
 
 #[test]
+fn validates_zero_alignment_padding_between_frames() {
+    let mut data = ANIMATION.to_vec();
+    data[130] = 1;
+    let declared = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    let crc = crc32fast::hash(&data[4..4 + declared]);
+    data[4 + declared..4 + declared + 4].copy_from_slice(&crc.to_le_bytes());
+
+    let error = Decoder::new(&data).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidAnimation);
+    assert_eq!(error.frame_index(), Some(0));
+}
+
+#[test]
 fn composes_frames_into_reusable_caller_buffers() {
     let decoder = Decoder::new(ANIMATION).unwrap();
     let mut compositor = decoder.compositor(PixelFormat::Rgba8).unwrap();
