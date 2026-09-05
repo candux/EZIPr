@@ -12,15 +12,14 @@ fn solid_rgba(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
 
 fn add_frame(
     encoder: &mut AnimationEncoder,
-    width: u32,
-    height: u32,
+    dimensions: (u32, u32),
     pixels: &[u8],
-    x: u32,
-    y: u32,
+    offset: (u32, u32),
     delay: (u16, u16),
     disposal: DisposalMethod,
     blend: BlendMode,
 ) {
+    let (width, height) = dimensions;
     let image = ImageView::new(
         width,
         height,
@@ -31,7 +30,7 @@ fn add_frame(
     .unwrap();
     encoder
         .push_frame(
-            FrameView::new(image, x, y, delay.0, delay.1)
+            FrameView::new(image, offset.0, offset.1, delay.0, delay.1)
                 .disposal(disposal)
                 .blend(blend),
         )
@@ -45,44 +44,36 @@ fn encoded_animation() -> ezipr::EncodedResource {
     let mut encoder = AnimationEncoder::new(3, 3, Repeat::Finite(2), options).unwrap();
     add_frame(
         &mut encoder,
-        3,
-        3,
+        (3, 3),
         &solid_rgba(3, 3, [255, 0, 0, 255]),
-        0,
-        0,
+        (0, 0),
         (1, 10),
         DisposalMethod::None,
         BlendMode::Source,
     );
     add_frame(
         &mut encoder,
-        2,
-        2,
+        (2, 2),
         &solid_rgba(2, 2, [0, 255, 0, 128]),
-        1,
-        1,
+        (1, 1),
         (1, 4),
         DisposalMethod::Background,
         BlendMode::Over,
     );
     add_frame(
         &mut encoder,
-        1,
-        1,
+        (1, 1),
         &solid_rgba(1, 1, [0, 0, 255, 255]),
-        2,
-        0,
+        (2, 0),
         (1, 20),
         DisposalMethod::Previous,
         BlendMode::Source,
     );
     add_frame(
         &mut encoder,
-        1,
-        1,
+        (1, 1),
         &solid_rgba(1, 1, [255, 255, 255, 255]),
-        0,
-        2,
+        (0, 2),
         (0, 0),
         DisposalMethod::None,
         BlendMode::Source,
@@ -96,11 +87,9 @@ fn balanced_dithering_uses_animation_canvas_coordinates() {
     let mut encoder = AnimationEncoder::new(8, 8, Repeat::Finite(1), options).unwrap();
     add_frame(
         &mut encoder,
-        1,
-        1,
+        (1, 1),
         &[5, 3, 5, 37],
-        3,
-        1,
+        (3, 1),
         (1, 10),
         DisposalMethod::None,
         BlendMode::Source,
@@ -164,11 +153,9 @@ fn argb888_animation_uses_generic_outer_resource_format() {
     let mut encoder = AnimationEncoder::new(1, 1, Repeat::Infinite, options).unwrap();
     add_frame(
         &mut encoder,
-        1,
-        1,
+        (1, 1),
         &[1, 2, 3, 4],
-        0,
-        0,
+        (0, 0),
         (1, 100),
         DisposalMethod::None,
         BlendMode::Source,

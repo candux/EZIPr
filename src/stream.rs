@@ -316,7 +316,7 @@ fn inflate_shared(
                 .try_into()
                 .expect("block-offset entry length was checked"),
         ) as usize;
-        if offset % 4 != 0 || offset < raw_offset || offset >= declared_size {
+        if !offset.is_multiple_of(4) || offset < raw_offset || offset >= declared_size {
             return Err(Error::new(
                 ErrorKind::InvalidOffset,
                 format!("shared-Huffman block {index} has invalid offset {offset}"),

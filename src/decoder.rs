@@ -560,13 +560,11 @@ impl<'a> Decoder<'a> {
                     frame.info.height(),
                 ))
             }
-            Payload::Pixel(_) | Payload::Ezip(_) => {
-                return Err(Error::new(
-                    ErrorKind::InvalidOffset,
-                    format!("frame index {index} is outside a one-frame resource"),
-                )
-                .in_frame(index));
-            }
+            Payload::Pixel(_) | Payload::Ezip(_) => Err(Error::new(
+                ErrorKind::InvalidOffset,
+                format!("frame index {index} is outside a one-frame resource"),
+            )
+            .in_frame(index)),
         }
     }
 }

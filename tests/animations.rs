@@ -8,6 +8,11 @@ const ANIMATION_ARGB888: &[u8] = include_bytes!("fixtures/animation/controlled-a
 const ANIMATION_RGB565: &[u8] = include_bytes!("fixtures/animation/opaque-rgb565.bin");
 const ANIMATION_RGB888: &[u8] = include_bytes!("fixtures/animation/opaque-rgb888.bin");
 
+fn rgba_pixel(pixels: &[u8], width: usize, x: usize, y: usize) -> &[u8] {
+    let start = (y * width + x) * 4;
+    &pixels[start..start + 4]
+}
+
 fn opaque_source_color(frame: usize, x: usize, y: usize) -> [u8; 3] {
     match frame {
         0 => [
@@ -116,10 +121,7 @@ fn decodes_stored_frame_rectangles() {
 
     let second = decoder.decode_frame(1, PixelFormat::Rgba8).unwrap();
     assert_eq!(&second.pixels()[0..4], &[0, 0, 0, 0]);
-    assert_eq!(
-        &second.pixels()[(1 * 8 + 2) * 4..(1 * 8 + 2) * 4 + 4],
-        &[0, 255, 0, 128]
-    );
+    assert_eq!(rgba_pixel(second.pixels(), 8, 2, 1), &[0, 255, 0, 128]);
 
     let third = decoder.decode_frame(2, PixelFormat::Rgba8).unwrap();
     assert_eq!((third.width(), third.height()), (4, 4));
@@ -146,10 +148,7 @@ fn decodes_owned_argb888_animation_exactly() {
     );
     let second = decoder.decode_frame(1, PixelFormat::Rgba8).unwrap();
     assert_eq!(&second.pixels()[0..4], &[0, 0, 0, 0]);
-    assert_eq!(
-        &second.pixels()[(1 * 8 + 2) * 4..(1 * 8 + 2) * 4 + 4],
-        &[0, 255, 0, 128]
-    );
+    assert_eq!(rgba_pixel(second.pixels(), 8, 2, 1), &[0, 255, 0, 128]);
     let third = decoder.decode_frame(2, PixelFormat::Rgba8).unwrap();
     assert!(
         third
@@ -197,17 +196,11 @@ fn sequential_compositor_applies_blend_and_disposal() {
 
     let second = compositor.next_frame().unwrap().unwrap();
     assert_eq!(&second.pixels()[0..4], &[255, 0, 0, 255]);
-    assert_eq!(
-        &second.pixels()[(1 * 8 + 2) * 4..(1 * 8 + 2) * 4 + 4],
-        &[127, 128, 0, 255]
-    );
+    assert_eq!(rgba_pixel(second.pixels(), 8, 2, 1), &[127, 128, 0, 255]);
 
     let third = compositor.next_frame().unwrap().unwrap();
     assert_eq!(&third.pixels()[0..4], &[0, 0, 0, 0]);
-    assert_eq!(
-        &third.pixels()[(2 * 8 + 4) * 4..(2 * 8 + 4) * 4 + 4],
-        &[0, 0, 255, 255]
-    );
+    assert_eq!(rgba_pixel(third.pixels(), 8, 4, 2), &[0, 0, 255, 255]);
     assert!(compositor.next_frame().unwrap().is_none());
 
     compositor.reset();

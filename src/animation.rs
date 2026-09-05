@@ -411,14 +411,9 @@ impl AnimationEncoder {
         inner.resize(table_offset + table_len, 0);
 
         let mut offsets = Vec::with_capacity(self.frames.len());
-        for (index, (frame, result)) in self
-            .frames
-            .iter()
-            .zip(compressed_frames.into_iter())
-            .enumerate()
-        {
+        for (index, (frame, result)) in self.frames.iter().zip(compressed_frames).enumerate() {
             if index != 0 {
-                while inner.len() % 4 != 0 {
+                while !inner.len().is_multiple_of(4) {
                     inner.push(0);
                 }
             }
@@ -548,7 +543,7 @@ pub(crate) fn parse_animation(
     let mut offsets = Vec::with_capacity(frame_count);
     for (index, bytes) in table.chunks_exact(4).enumerate() {
         let offset = u32::from_be_bytes(bytes.try_into().expect("fixed-size field")) as usize;
-        if offset % 4 != 0 || offset < table_offset + table_len || offset >= declared {
+        if !offset.is_multiple_of(4) || offset < table_offset + table_len || offset >= declared {
             return Err(Error::new(
                 ErrorKind::InvalidOffset,
                 format!("animation frame {index} has invalid offset {offset}"),
