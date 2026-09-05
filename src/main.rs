@@ -604,7 +604,8 @@ fn load_gif(path: &Path) -> CliResult<LoadedAnimation> {
     let repeat = match decoder.repeat() {
         gif::Repeat::Infinite => Repeat::Infinite,
         gif::Repeat::Finite(0) => Repeat::Finite(1),
-        gif::Repeat::Finite(count) => Repeat::Finite(u32::from(count)),
+        // GIF counts repeats after the first play; eZIP-A counts total plays.
+        gif::Repeat::Finite(count) => Repeat::Finite(u32::from(count) + 1),
     };
     let mut frames = Vec::new();
     while let Some(frame) = decoder.read_next_frame()? {

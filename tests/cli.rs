@@ -56,6 +56,43 @@ fn path_text(path: &Path) -> &str {
 }
 
 #[test]
+fn gif_repeat_counts_convert_to_total_plays() {
+    let directory = TestDirectory::new();
+    for (index, (repeat, expected)) in [
+        (None, Repeat::Finite(1)),
+        (Some(gif::Repeat::Infinite), Repeat::Infinite),
+        (Some(gif::Repeat::Finite(1)), Repeat::Finite(2)),
+        (Some(gif::Repeat::Finite(u16::MAX)), Repeat::Finite(65_536)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let input = directory.join(format!("repeat-{index}.gif"));
+        let output = directory.join(format!("repeat-{index}.bin"));
+        {
+            let file = fs::File::create(&input).unwrap();
+            let mut encoder = gif::Encoder::new(file, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+            if let Some(repeat) = repeat {
+                encoder.set_repeat(repeat).unwrap();
+            }
+            for value in [0, 1] {
+                let frame = gif::Frame {
+                    width: 1,
+                    height: 1,
+                    delay: 10,
+                    buffer: vec![value].into(),
+                    ..Default::default()
+                };
+                encoder.write_frame(&frame).unwrap();
+            }
+        }
+        assert_success(ezipr(&["encode", path_text(&input), path_text(&output)]));
+        let bytes = fs::read(output).unwrap();
+        assert_eq!(Decoder::new(&bytes).unwrap().repeat(), Some(expected));
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn png_and_apng_exports_report_flush_failures() {
     for input in [
