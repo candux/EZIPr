@@ -56,6 +56,22 @@ fn path_text(path: &Path) -> &str {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn png_and_apng_exports_report_flush_failures() {
+    for input in [
+        "tests/fixtures/static/ezip-rgb565.bin",
+        "tests/fixtures/animation/controlled.bin",
+    ] {
+        let result = ezipr(&["decode", input, "/dev/full"]);
+        assert!(
+            !result.status.success(),
+            "export incorrectly succeeded: {input}"
+        );
+        assert!(String::from_utf8_lossy(&result.stderr).contains("error:"));
+    }
+}
+
+#[test]
 fn info_and_verify_cover_static_and_animation_resources() {
     let info = assert_success(ezipr(&["info", "tests/fixtures/animation/controlled.bin"]));
     assert!(info.contains("kind: eZIP-A"));

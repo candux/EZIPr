@@ -651,7 +651,9 @@ fn write_png(
         PixelFormat::Rgba8 => png::ColorType::Rgba,
         _ => return Err(input_error("unsupported output pixel format")),
     });
-    encoder.write_header()?.write_image_data(pixels)?;
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(pixels)?;
+    writer.finish()?;
     Ok(())
 }
 
@@ -689,6 +691,7 @@ fn write_apng(decoder: &Decoder<'_>, path: &Path) -> CliResult<()> {
         writer.set_blend_op(blend_to_png(frame_info.blend())?)?;
         writer.write_image_data(image.pixels())?;
     }
+    writer.finish()?;
     Ok(())
 }
 
