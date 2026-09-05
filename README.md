@@ -97,7 +97,7 @@ Ordered dithering replaces some gradient banding with fine pixel-level noise,
 but the compression cost can be material. For typical UI elements, `balanced`
 output is about 30% larger than `none`. A synthetic 128x128 gray gradient can
 be nearly three times larger, while a flat color already on the RGB565
-reconstruction grid had no size penalty. Measure representative assets when
+reconstruction grid has no size penalty. Measure representative assets when
 flash usage matters. The `reference` mode exists for conversion compatibility;
 `balanced` is the recommended choice for new resources.
 
