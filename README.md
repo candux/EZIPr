@@ -17,14 +17,15 @@ resources or decoded images. A minimal static round trip looks like this:
 ```rust
 use ezipr::{Decoder, Encoder, ImageView, PixelFormat};
 
-# fn example(rgb: &[u8]) -> ezipr::Result<()> {
-let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, rgb)?;
-let encoded = Encoder::default().encode(image)?;
-let decoded = Decoder::new(encoded.as_bytes())?
-    .decode_frame(0, PixelFormat::Rgba8)?;
-# let _ = decoded;
-# Ok(())
-# }
+fn example(rgb: &[u8]) -> ezipr::Result<()> {
+    let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, rgb)?;
+    let encoded = Encoder::default().encode(image)?;
+    let decoded = Decoder::new(encoded.as_bytes())?
+        .decode_frame(0, PixelFormat::Rgba8)?;
+
+    let _ = decoded;
+    Ok(())
+}
 ```
 
 The command-line program is optional:
