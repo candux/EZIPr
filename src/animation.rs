@@ -650,6 +650,23 @@ pub(crate) fn parse_animation(
             .at_offset(compressed_offset));
         }
         let compressed = &stream[compressed_offset..checksum_offset];
+        let decoded_size = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|count| count.checked_mul(storage.bytes_per_pixel()))
+            .and_then(|size| total_decoded.checked_add(size))
+            .ok_or_else(|| {
+                Error::new(ErrorKind::LimitExceeded, "decoded size overflow").in_frame(index)
+            })?;
+        if width > limits.width_limit()
+            || height > limits.height_limit()
+            || decoded_size > limits.decoded_byte_limit()
+        {
+            return Err(Error::new(
+                ErrorKind::LimitExceeded,
+                "animation frame exceeds configured decode limits",
+            )
+            .in_frame(index));
+        }
         let remaining = limits.decoded_byte_limit().saturating_sub(total_decoded);
         let filtered = miniz_oxide::inflate::decompress_to_vec_with_limit(compressed, remaining)
             .map_err(|error| {
@@ -708,7 +725,8 @@ pub(crate) fn parse_animation(
             header.block_rows(),
             header.has_row_filters(),
             mode,
-        )?;
+        )
+        .map_err(|error| error.in_frame(index))?;
         warnings.extend(
             decoded
                 .warnings
@@ -833,6 +851,7 @@ impl<'decoder, 'data> Compositor<'decoder, 'data> {
             .checked_mul(decoder.info().height() as usize)
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or_else(|| Error::new(ErrorKind::LimitExceeded, "canvas size overflow"))?;
+        decoder.validate_output_size(canvas_len)?;
         Ok(Self {
             decoder,
             output,
@@ -997,6 +1016,9 @@ fn clear_rectangle(canvas: &mut [u8], canvas_width: usize, canvas_height: usize,
     let y_offset = info.y_offset as usize;
     let clear_width = (info.width as usize).min(canvas_width.saturating_sub(x_offset));
     let clear_height = (info.height as usize).min(canvas_height.saturating_sub(y_offset));
+    if clear_width == 0 || clear_height == 0 {
+        return;
+    }
     for y in y_offset..y_offset + clear_height {
         let start = (y * canvas_width + x_offset) * 4;
         let end = start + clear_width * 4;

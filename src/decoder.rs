@@ -15,6 +15,10 @@ pub enum DecodeMode {
 }
 
 /// Resource limits applied before allocating decoded output.
+///
+/// The byte limit bounds stored decoded pixels (summed across animation frames),
+/// DEFLATE output, and each requested output buffer or compositor canvas. It is
+/// not a bound on the combined memory usage of all live buffers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DecodeLimits {
     max_width: u32,
@@ -359,6 +363,15 @@ impl<'a> Decoder<'a> {
                         warnings,
                     });
                 }
+                if pixel_count
+                    .checked_mul(bytes_per_pixel)
+                    .is_none_or(|size| size > options.limits.max_decoded_bytes)
+                {
+                    return Err(Error::new(
+                        ErrorKind::LimitExceeded,
+                        "eZIP pixels exceed configured decoded-byte limit",
+                    ));
+                }
                 let inflated = inflate_stream(
                     payload,
                     stream_header,
@@ -510,7 +523,19 @@ impl<'a> Decoder<'a> {
     /// Number of bytes required to decode a stored frame in `output` format.
     pub fn frame_buffer_size(&self, index: usize, output: PixelFormat) -> Result<usize> {
         let info = self.frame_info(index)?;
-        decoded_pixel_len(info.width(), info.height(), output)
+        let size = decoded_pixel_len(info.width(), info.height(), output)?;
+        self.validate_output_size(size)?;
+        Ok(size)
+    }
+
+    pub(crate) fn validate_output_size(&self, size: usize) -> Result<()> {
+        if size > self.options.limits.max_decoded_bytes {
+            return Err(Error::new(
+                ErrorKind::LimitExceeded,
+                "decoded output exceeds configured decoded-byte limit",
+            ));
+        }
+        Ok(())
     }
 
     /// Decode a stored frame rectangle into a caller-owned tightly packed buffer.
@@ -520,6 +545,7 @@ impl<'a> Decoder<'a> {
         output: PixelFormat,
         destination: &mut [u8],
     ) -> Result<usize> {
+        self.frame_buffer_size(index, output)?;
         let (payload, width, height) = self.frame_payload(index)?;
         decode_storage_pixels_into(
             payload,
@@ -532,6 +558,7 @@ impl<'a> Decoder<'a> {
     }
 
     pub fn decode_frame(&self, index: usize, output: PixelFormat) -> Result<DecodedImage> {
+        self.frame_buffer_size(index, output)?;
         let (payload, width, height) = self.frame_payload(index)?;
         let pixels =
             decode_storage_pixels(payload, width, height, self.info.storage_format, output)?;
