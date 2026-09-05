@@ -114,11 +114,21 @@ and filterless storage. Every candidate is compressed with every miniz level
 from 0 through 10. Zopfli is then run on the best representation found, and
 its raw-DEFLATE stream is retained only when it is smaller.
 
+Library users enable this implementation with the `smallest` Cargo feature;
+the `cli` feature includes it automatically. Without that feature, requesting
+`CompressionStrategy::Smallest` returns an error and Fast-only or decode-only
+consumers do not compile or link Zopfli. The strategy applies only to eZIP;
+using it with an uncompressed PIXEL resource is an error.
+
 For animations, every frame's filter plan and compressed stream are optimized
 independently. Because eZIP-A stores one filter-mode flag for the entire
 animation, filtered and filterless results are compared by their total frame
 size and the smaller mode is used consistently for every frame. Use
 `--no-filters` to search only filterless frame data.
+
+The global animation filter mode is selected from the miniz results before
+Zopfli runs, so only the winning representation receives the expensive Zopfli
+pass.
 
 The result is guaranteed not to exceed the normal configured candidate, but
 it is the smallest of the candidates described above rather than a proof of
@@ -126,3 +136,8 @@ the globally smallest possible DEFLATE stream. Encoding can be much slower,
 especially for large images, while decoding speed and compatibility are
 unchanged. `--compression` still selects the single-pass level without
 `--smallest` and supplies the baseline candidate when optimization is enabled.
+As an order of magnitude, normal encoding took about 0.3 seconds and
+`--smallest` about 40 seconds for a 1.6-megapixel RGB565 asset on the development
+machine. Animation cost grows with the number and size of its stored frames.
+Runtime depends heavily on image content and hardware; the CLI prints a notice
+before beginning the search so a long encode is not mistaken for a hang.

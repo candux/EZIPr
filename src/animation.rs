@@ -225,6 +225,7 @@ impl AnimationEncoder {
                 "animation encoding requires the eZIP representation",
             ));
         }
+        crate::encoder::validate_compression_strategy(options)?;
         if repeat == Repeat::Finite(0) {
             return Err(Error::new(
                 ErrorKind::InvalidInput,
@@ -353,7 +354,7 @@ impl AnimationEncoder {
                 .iter()
                 .zip(&stored_frames)
                 .map(|(frame, stored)| {
-                    crate::encoder::compress_animation_pixels(
+                    crate::encoder::compress_animation_pixels_miniz(
                         stored,
                         frame.width as usize,
                         frame.height as usize,
@@ -361,22 +362,27 @@ impl AnimationEncoder {
                         options,
                     )
                 })
-                .collect::<Result<Vec<_>>>()
+                .collect::<Vec<_>>()
         };
-        let mut compressed_frames = compress_frames(self.options)?;
+        let mut compressed_frames = compress_frames(self.options);
         if self.options.strategy() == crate::CompressionStrategy::Smallest
             && self.options.uses_row_filters()
         {
-            let filterless_frames = compress_frames(self.options.row_filters(false))?;
-            let total_size = |frames: &[crate::encoder::CompressionResult]| {
-                frames.iter().fold(0_usize, |total, frame| {
-                    total.saturating_add(frame.compressed.len())
-                })
-            };
-            if total_size(&filterless_frames) < total_size(&compressed_frames) {
+            let filterless_frames = compress_frames(self.options.row_filters(false));
+            if compressed_frame_data_size(&filterless_frames)
+                < compressed_frame_data_size(&compressed_frames)
+            {
                 compressed_frames = filterless_frames;
             }
         }
+        if self.options.strategy() == crate::CompressionStrategy::Smallest {
+            compressed_frames = compressed_frames
+                .into_iter()
+                .map(crate::encoder::optimize_with_zopfli)
+                .collect::<Result<Vec<_>>>()?;
+        }
+        // The miniz comparison replaces the entire vector at once, and the
+        // Zopfli pass cannot alter filtering, so every frame has this mode.
         let has_row_filters = compressed_frames[0].has_row_filters;
 
         let table_len = self
@@ -462,6 +468,23 @@ impl AnimationEncoder {
         bytes.extend_from_slice(&crc.to_le_bytes());
         Ok(EncodedResource::new(bytes, storage, resource_format))
     }
+}
+
+fn compressed_frame_data_size(frames: &[crate::encoder::CompressionResult]) -> usize {
+    frames
+        .iter()
+        .enumerate()
+        .fold(0_usize, |total, (index, frame)| {
+            let size = FRAME_HEADER_LEN
+                .saturating_add(frame.compressed.len())
+                .saturating_add(StreamHeader::CHECKSUM_LEN);
+            let aligned = if index + 1 == frames.len() {
+                size
+            } else {
+                size.saturating_add(3) & !3
+            };
+            total.saturating_add(aligned)
+        })
 }
 
 #[derive(Debug)]

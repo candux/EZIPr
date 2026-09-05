@@ -330,6 +330,9 @@ fn decode(args: DecodeArgs) -> CliResult<()> {
 }
 
 fn encode(args: EncodeArgs) -> CliResult<()> {
+    if args.smallest {
+        eprintln!("searching for the smallest output; large inputs can take a while...");
+    }
     let extension = extension(&args.input)?;
     let encoded = match extension.as_str() {
         "toml" => encode_manifest(&args)?,

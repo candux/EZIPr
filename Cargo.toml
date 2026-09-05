@@ -10,7 +10,8 @@ path = "src/lib.rs"
 
 [features]
 default = []
-cli = ["dep:clap", "dep:gif", "dep:png", "dep:serde", "dep:toml"]
+cli = ["dep:clap", "dep:gif", "dep:png", "dep:serde", "dep:toml", "smallest"]
+smallest = ["dep:zopfli"]
 
 [[bin]]
 name = "ezipr"
@@ -26,7 +27,7 @@ png = { version = "0.18", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
 toml = { version = "1.1", optional = true }
-zopfli = { version = "0.8", default-features = false, features = ["std"] }
+zopfli = { version = "0.8", default-features = false, features = ["std"], optional = true }
 
 [profile.release]
 lto = "thin"

@@ -1,7 +1,9 @@
+#[cfg(feature = "smallest")]
+use ezipr::CompressionStrategy;
 use ezipr::{
-    AlphaMode, AnimationEncoder, BlendMode, ColorDepth, CompressionStrategy, Decoder,
-    DisposalMethod, EncodeOptions, FrameView, ImageView, PixelFormat, Repeat, ResourceFormat,
-    ResourceKind, Rgb565Dithering, StorageFormat,
+    AlphaMode, AnimationEncoder, BlendMode, ColorDepth, Decoder, DisposalMethod, EncodeOptions,
+    FrameView, ImageView, PixelFormat, Repeat, ResourceFormat, ResourceKind, Rgb565Dithering,
+    StorageFormat,
 };
 
 fn solid_rgba(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
@@ -207,6 +209,16 @@ fn validates_animation_builder_input() {
 }
 
 #[test]
+#[cfg(not(feature = "smallest"))]
+fn smallest_animation_strategy_requires_its_cargo_feature() {
+    let options =
+        EncodeOptions::default().compression_strategy(ezipr::CompressionStrategy::Smallest);
+    let error = AnimationEncoder::new(3, 3, Repeat::Infinite, options).unwrap_err();
+    assert_eq!(error.kind(), ezipr::ErrorKind::InvalidInput);
+    assert!(error.message().contains("Cargo feature"));
+}
+
+#[test]
 fn animation_output_is_deterministic_for_the_locked_graph() {
     let first = encoded_animation();
     let second = encoded_animation();
@@ -215,6 +227,7 @@ fn animation_output_is_deterministic_for_the_locked_graph() {
 }
 
 #[test]
+#[cfg(feature = "smallest")]
 fn smallest_strategy_optimizes_animation_frames_without_changing_pixels() {
     let pixels: Vec<_> = (0_u8..16)
         .flat_map(|y| {

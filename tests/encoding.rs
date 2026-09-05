@@ -282,6 +282,7 @@ fn argb565_dithering_preserves_alpha_bytes() {
 }
 
 #[test]
+#[cfg(feature = "smallest")]
 fn smallest_strategy_is_deterministic_no_larger_and_pixel_equivalent() {
     let pixels: Vec<_> = (0_u8..64)
         .flat_map(|y| {
@@ -311,6 +312,7 @@ fn smallest_strategy_is_deterministic_no_larger_and_pixel_equivalent() {
 }
 
 #[test]
+#[cfg(feature = "smallest")]
 fn smallest_strategy_honors_explicit_filterless_mode() {
     let options = EncodeOptions::new(ColorDepth::Rgb888)
         .alpha_mode(AlphaMode::Discard)
@@ -319,4 +321,24 @@ fn smallest_strategy_honors_explicit_filterless_mode() {
     let encoded = Encoder::new(options).encode(image()).unwrap();
     let stream = StreamHeader::parse(&encoded.as_bytes()[4..]).unwrap();
     assert!(!stream.has_row_filters());
+}
+
+#[test]
+fn smallest_strategy_rejects_uncompressed_pixel_resources() {
+    let options = EncodeOptions::new(ColorDepth::Rgb888)
+        .resource_encoding(ResourceEncoding::Pixel)
+        .compression_strategy(CompressionStrategy::Smallest);
+    let error = Encoder::new(options).encode(image()).unwrap_err();
+    assert_eq!(error.kind(), ezipr::ErrorKind::InvalidInput);
+    assert!(error.message().contains("PIXEL"));
+}
+
+#[test]
+#[cfg(not(feature = "smallest"))]
+fn smallest_strategy_requires_its_cargo_feature() {
+    let options =
+        EncodeOptions::new(ColorDepth::Rgb888).compression_strategy(CompressionStrategy::Smallest);
+    let error = Encoder::new(options).encode(image()).unwrap_err();
+    assert_eq!(error.kind(), ezipr::ErrorKind::InvalidInput);
+    assert!(error.message().contains("Cargo feature"));
 }

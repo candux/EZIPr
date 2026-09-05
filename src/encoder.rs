@@ -54,6 +54,8 @@ pub enum CompressionStrategy {
     #[default]
     Fast,
     /// Search deterministic filter plans and compressors for the smallest result.
+    ///
+    /// Encoding with this strategy requires the `smallest` Cargo feature.
     Smallest,
 }
 
@@ -227,6 +229,15 @@ impl Encoder {
     }
 
     pub fn encode(&self, image: ImageView<'_>) -> Result<EncodedResource> {
+        if self.options.resource_encoding == ResourceEncoding::Pixel
+            && self.options.compression_strategy == CompressionStrategy::Smallest
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "smallest-output compression is not applicable to PIXEL resources",
+            ));
+        }
+        validate_compression_strategy(self.options)?;
         let width = u16::try_from(image.width()).map_err(|_| {
             Error::new(
                 ErrorKind::InvalidDimensions,
@@ -305,29 +316,34 @@ pub(crate) fn compress_pixels(
     bytes_per_pixel: usize,
     options: EncodeOptions,
 ) -> Result<CompressionResult> {
-    compress_pixels_impl(pixels, width, height, bytes_per_pixel, options, true)
+    let result = compress_pixels_miniz(pixels, width, height, bytes_per_pixel, options, true);
+    if options.strategy() == CompressionStrategy::Smallest {
+        optimize_with_zopfli(result)
+    } else {
+        Ok(result)
+    }
 }
 
-pub(crate) fn compress_animation_pixels(
+pub(crate) fn compress_animation_pixels_miniz(
     pixels: &[u8],
     width: usize,
     height: usize,
     bytes_per_pixel: usize,
     options: EncodeOptions,
-) -> Result<CompressionResult> {
+) -> CompressionResult {
     // eZIP-A has one filter-mode flag for every frame, so a frame must not
     // independently switch the whole animation to filterless storage.
-    compress_pixels_impl(pixels, width, height, bytes_per_pixel, options, false)
+    compress_pixels_miniz(pixels, width, height, bytes_per_pixel, options, false)
 }
 
-fn compress_pixels_impl(
+fn compress_pixels_miniz(
     pixels: &[u8],
     width: usize,
     height: usize,
     bytes_per_pixel: usize,
     options: EncodeOptions,
     allow_filterless_candidate: bool,
-) -> Result<CompressionResult> {
+) -> CompressionResult {
     let baseline = if options.uses_row_filters() {
         (
             true,
@@ -344,11 +360,11 @@ fn compress_pixels_impl(
     };
     if options.strategy() == CompressionStrategy::Fast {
         let compressed = miniz_oxide::deflate::compress_to_vec(&baseline.1, options.level());
-        return Ok(CompressionResult {
+        return CompressionResult {
             filtered: baseline.1,
             compressed,
             has_row_filters: baseline.0,
-        });
+        };
     }
 
     let mut candidates = vec![baseline];
@@ -393,9 +409,44 @@ fn compress_pixels_impl(
         }
     }
 
+    best
+}
+
+#[cfg(feature = "smallest")]
+pub(crate) fn validate_compression_strategy(_options: EncodeOptions) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(feature = "smallest"))]
+pub(crate) fn validate_compression_strategy(options: EncodeOptions) -> Result<()> {
+    if options.strategy() == CompressionStrategy::Smallest {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "smallest-output compression requires the `smallest` Cargo feature",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "smallest")]
+pub(crate) fn optimize_with_zopfli(mut best: CompressionResult) -> Result<CompressionResult> {
+    use std::num::NonZeroU64;
+
+    // Zopfli recommends fewer iterations for large inputs. A finite stale-pass
+    // limit avoids spending time after the search has stopped improving.
+    let iteration_count = if best.filtered.len() >= 1024 * 1024 {
+        5
+    } else {
+        10
+    };
+    let options = zopfli::Options {
+        iteration_count: NonZeroU64::new(iteration_count).expect("iteration count is positive"),
+        iterations_without_improvement: NonZeroU64::new(5).expect("improvement limit is positive"),
+        ..zopfli::Options::default()
+    };
     let mut zopfli = Vec::new();
     zopfli::compress(
-        zopfli::Options::default(),
+        options,
         zopfli::Format::Deflate,
         best.filtered.as_slice(),
         &mut zopfli,
@@ -410,6 +461,14 @@ fn compress_pixels_impl(
         best.compressed = zopfli;
     }
     Ok(best)
+}
+
+#[cfg(not(feature = "smallest"))]
+pub(crate) fn optimize_with_zopfli(_best: CompressionResult) -> Result<CompressionResult> {
+    Err(Error::new(
+        ErrorKind::InvalidInput,
+        "smallest-output compression requires the `smallest` Cargo feature",
+    ))
 }
 
 fn push_unique_candidate(
