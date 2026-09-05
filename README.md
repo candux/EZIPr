@@ -138,5 +138,5 @@ especially for large images, while decoding speed and compatibility are
 unchanged. `--compression` still selects the single-pass level without
 `--smallest` and supplies the baseline candidate when optimization is enabled.
 A typical 1.6-megapixel RGB565 image takes about 0.3 seconds with `Fast` and
-40 seconds with `Smallest`; across six such assets, `Smallest` reduced output
-by about 15% to 18%.
+40 seconds with `Smallest`. `Smallest` typically reduces output size by 15% to
+18%.
