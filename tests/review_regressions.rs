@@ -5,6 +5,55 @@ fn one_pixel() -> ImageView<'static> {
 }
 
 #[test]
+fn four_pixel_layout_ambiguity_is_reported_and_valid_crc_wins() {
+    let source = [
+        255, 0, 0, 37, 0, 255, 0, 81, 0, 0, 255, 129, 255, 255, 255, 255,
+    ];
+    let image = ImageView::new(4, 1, PixelFormat::Rgba8, 16, &source).unwrap();
+    let diagnostic = DecodeOptions::new().mode(DecodeMode::Diagnostic);
+    for alpha in [AlphaMode::Discard, AlphaMode::Preserve] {
+        let options = EncodeOptions::new(ColorDepth::Rgb888)
+            .alpha_mode(alpha)
+            .resource_encoding(ResourceEncoding::Pixel);
+        let encoded = Encoder::new(options).encode(image).unwrap();
+        let expected = Decoder::new(encoded.as_bytes())
+            .unwrap()
+            .decode_frame(0, PixelFormat::Rgba8)
+            .unwrap();
+        let mut bytes = encoded.as_bytes().to_vec();
+        bytes.truncate(bytes.len() - 4);
+        assert!(Decoder::new(&bytes).is_err());
+        let decoder = Decoder::with_options(&bytes, diagnostic).unwrap();
+        assert_eq!(decoder.info().storage_format(), encoded.storage_format());
+        assert_eq!(
+            decoder
+                .decode_frame(0, PixelFormat::Rgba8)
+                .unwrap()
+                .pixels(),
+            expected.pixels()
+        );
+        assert!(
+            decoder
+                .warnings()
+                .iter()
+                .any(|warning| warning.kind() == WarningKind::MetadataMismatch
+                    && warning.message().contains("ambiguous"))
+        );
+
+        let packed = Encoder::new(
+            EncodeOptions::new(ColorDepth::Rgb565)
+                .alpha_mode(alpha)
+                .resource_encoding(ResourceEncoding::Pixel),
+        )
+        .encode(image)
+        .unwrap();
+        let decoder = Decoder::with_options(packed.as_bytes(), diagnostic).unwrap();
+        assert_eq!(decoder.info().storage_format(), packed.storage_format());
+        assert!(decoder.warnings().is_empty());
+    }
+}
+
+#[test]
 fn diagnostic_animation_padding_respects_cumulative_limit() {
     let mut encoder =
         AnimationEncoder::new(8, 6, Repeat::Infinite, EncodeOptions::default()).unwrap();

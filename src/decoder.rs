@@ -188,9 +188,21 @@ impl<'a> Decoder<'a> {
                     let pixel_bytes = pixel_count.checked_mul(bpp)?;
                     (payload.len() == pixel_bytes + 4).then_some((bpp, pixel_bytes))
                 });
-                let inferred = exact.is_none();
-                let selected = exact.or_else(|| {
-                    (options.mode == DecodeMode::Diagnostic).then(|| {
+                let valid_crc = candidate_bpp.iter().find_map(|&bpp| {
+                    let pixel_bytes = pixel_count.checked_mul(bpp)?;
+                    let trailer = payload.get(pixel_bytes..pixel_bytes.checked_add(4)?)?;
+                    (trailer == crc32fast::hash(&payload[..pixel_bytes]).to_le_bytes())
+                        .then_some((bpp, pixel_bytes))
+                });
+                let trailerless = candidate_bpp.iter().find_map(|&bpp| {
+                    let pixel_bytes = pixel_count.checked_mul(bpp)?;
+                    (payload.len() == pixel_bytes).then_some((bpp, pixel_bytes))
+                });
+                let ambiguous = valid_crc.is_none() && exact.is_some() && trailerless.is_some();
+                let selected = if options.mode == DecodeMode::Strict {
+                    exact
+                } else {
+                    valid_crc.or(trailerless).or(exact).or_else(|| {
                         candidate_bpp
                             .iter()
                             .filter_map(|&bpp| {
@@ -198,8 +210,9 @@ impl<'a> Decoder<'a> {
                                 (payload.len() >= pixel_bytes).then_some((bpp, pixel_bytes))
                             })
                             .min_by_key(|&(_, pixel_bytes)| payload.len().abs_diff(pixel_bytes))
-                    })?
-                });
+                    })
+                };
+                let inferred = exact.is_none() || selected != exact || ambiguous;
                 let (bpp, pixel_bytes) = selected.ok_or_else(|| {
                     Error::new(
                         ErrorKind::InvalidPixelLayout,
@@ -221,7 +234,8 @@ impl<'a> Decoder<'a> {
                     warnings.push(Warning::new(
                         crate::WarningKind::MetadataMismatch,
                         format!(
-                            "inferred {storage:?} from noncanonical {}-byte PIXEL payload; expected {} bytes including CRC-32",
+                            "inferred {storage:?} from {}{}-byte PIXEL payload; expected {} bytes including CRC-32",
+                            if ambiguous { "ambiguous " } else { "noncanonical " },
                             payload.len(),
                             pixel_bytes + 4
                         ),
