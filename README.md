@@ -1,37 +1,35 @@
 # EZIPr
 
-EZIPr is a native Rust library for inspecting, decoding, and encoding SiFli
-eZIP and PIXEL image resources. Static and animated images share one resource
-model, while the command-line program provides PNG, APNG, GIF, and frame
-manifest adapters.
+EZIPr is a Rust library and command-line program for decoding and encoding
+SiFli eZIP and PIXEL image resources. The command-line program reads and writes
+PNG and APNG, imports GIF animations, and accepts TOML animation manifests.
 
-Static PIXEL, standard eZIP, shared-Huffman eZIP, and eZIP-A frame decoding are
-supported. Animated resources expose stored frame rectangles as well as a
-stateful sequential compositor for blend and disposal handling. Native eZIP-A
-encoding accepts explicit frame rectangles, timing, disposal, blend, and
-repeat metadata.
+Decoding supports static PIXEL resources, standard eZIP, shared-Huffman eZIP,
+and eZIP-A animations. Encoding supports PIXEL resources, standard eZIP, and
+eZIP-A. The RGB565 encoder provides grid-stable ordered dithering and optional
+size-optimized compression.
+
+Animated resources expose stored frame rectangles and a sequential compositor
+that applies blending and disposal. Animation encoding accepts frame
+rectangles, timing, disposal, blending, and repeat metadata.
 
 The library accepts caller-owned RGB or RGBA buffers and returns owned encoded
 resources or decoded images. A minimal static round trip looks like this:
 
 ```rust
-use ezipr::{Decoder, Encoder, ImageView, PixelFormat};
+use ezipr::{DecodedImage, Decoder, Encoder, ImageView, PixelFormat};
 
-fn example(rgb: &[u8]) -> ezipr::Result<()> {
+fn round_trip(rgb: &[u8]) -> ezipr::Result<DecodedImage> {
     let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, rgb)?;
     let encoded = Encoder::default().encode(image)?;
-    let decoded = Decoder::new(encoded.as_bytes())?
-        .decode_frame(0, PixelFormat::Rgba8)?;
-
-    let _ = decoded;
-    Ok(())
+    Decoder::new(encoded.as_bytes())?.decode_frame(0, PixelFormat::Rgba8)
 }
 ```
 
-The command-line program is optional:
+Install the optional command-line program from the repository:
 
 ```console
-cargo build --features cli
+cargo install --path . --features cli
 
 ezipr info image.bin
 ezipr verify image.bin
@@ -93,13 +91,12 @@ animation manifest. Both ordered modes use absolute animation-canvas
 coordinates so the pattern does not shift at frame rectangle boundaries.
 Alpha bytes are never dithered.
 
-Ordered dithering replaces some gradient banding with fine pixel-level noise,
-but the compression cost can be material. For typical UI elements, `balanced`
-output is about 30% larger than `none`. A synthetic 128x128 gray gradient can
-be nearly three times larger, while a flat color already on the RGB565
-reconstruction grid has no size penalty. Measure representative assets when
-flash usage matters. The `reference` mode exists for conversion compatibility;
-`balanced` is the recommended choice for new resources.
+Ordered dithering replaces some gradient banding with fine pixel-level noise.
+For typical UI elements, `balanced` output is about 30% larger than `none` and
+can be nearly three times larger for a synthetic 128x128 gray gradient. A flat
+color already on the RGB565 reconstruction grid has no size penalty. The
+`reference` mode exists for conversion compatibility; `balanced` is recommended
+for new resources.
 
 RGB565 resources made with different dithering settings can therefore decode
 to slightly different colors even when both files are valid. RGB888 does not
@@ -108,35 +105,21 @@ ARGB888 output.
 
 ## Size-optimized encoding
 
-`ezipr encode input.png output.bin --smallest` enables an exhaustive,
-deterministic search over the encoder's current compression candidates. It
-tries the adaptive PNG row-filter plan, plans using each single PNG filter,
-and filterless storage. Every candidate is compressed with every miniz level
-from 0 through 10. Zopfli is then run on the best representation found, and
-its raw-DEFLATE stream is retained only when it is smaller.
+Use `ezipr encode input.png output.bin --smallest` to search for a smaller eZIP
+resource. It compares adaptive filtering, each fixed PNG row filter, and
+filterless storage at every miniz compression level, then tries Zopfli on the
+best filtered representation. The smallest result is deterministic and never
+larger than the equivalent normal encode.
 
-Library users enable this implementation with the `smallest` Cargo feature;
-the `cli` feature includes it automatically. Without that feature, requesting
-`CompressionStrategy::Smallest` returns an error and Fast-only or decode-only
-consumers do not compile or link Zopfli. The strategy applies only to eZIP;
-using it with an uncompressed PIXEL resource is an error.
+For animations, each frame is optimized and the selected filter mode is used
+consistently across the resource. `--no-filters` restricts the search to
+filterless data. PIXEL resources are uncompressed and do not support
+`--smallest`.
 
-For animations, every frame's filter plan and compressed stream are optimized
-independently. Because eZIP-A stores one filter-mode flag for the entire
-animation, filtered and filterless results are compared by their total frame
-size and the smaller mode is used consistently for every frame. Use
-`--no-filters` to search only filterless frame data.
+A typical 1.6-megapixel RGB565 image takes about 0.3 seconds with normal
+encoding and 40 seconds with `--smallest`. The resulting resource is typically
+15% to 18% smaller, with no change to decoding speed or compatibility.
 
-The global animation filter mode is selected from the miniz results before
-Zopfli runs, so only the winning representation receives the expensive Zopfli
-pass.
-
-The result is guaranteed not to exceed the normal configured candidate, but
-it is the smallest of the candidates described above rather than a proof of
-the globally smallest possible DEFLATE stream. Encoding can be much slower,
-especially for large images, while decoding speed and compatibility are
-unchanged. `--compression` still selects the single-pass level without
-`--smallest` and supplies the baseline candidate when optimization is enabled.
-A typical 1.6-megapixel RGB565 image takes about 0.3 seconds with `Fast` and
-40 seconds with `Smallest`. `Smallest` typically reduces output size by 15% to
-18%.
+Library users enable `CompressionStrategy::Smallest` with the `smallest` Cargo
+feature. The `cli` feature includes it automatically; normal encoding and
+decoding do not require Zopfli.
