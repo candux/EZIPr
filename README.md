@@ -136,8 +136,6 @@ the globally smallest possible DEFLATE stream. Encoding can be much slower,
 especially for large images, while decoding speed and compatibility are
 unchanged. `--compression` still selects the single-pass level without
 `--smallest` and supplies the baseline candidate when optimization is enabled.
-As an order of magnitude, normal encoding took about 0.3 seconds and
-`--smallest` about 40 seconds for a 1.6-megapixel RGB565 asset on the development
-machine. Animation cost grows with the number and size of its stored frames.
-Runtime depends heavily on image content and hardware; the CLI prints a notice
-before beginning the search so a long encode is not mistaken for a hang.
+A typical 1.6-megapixel RGB565 image takes about 0.3 seconds with `Fast` and
+40 seconds with `Smallest`; across six such assets, `Smallest` reduced output
+by about 15% to 18%.
