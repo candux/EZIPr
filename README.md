@@ -4,14 +4,30 @@ EZIPr is a Rust library and command-line program for decoding and encoding
 SiFli eZIP and PIXEL image resources. The command-line program reads and writes
 PNG and APNG, imports GIF animations, and accepts TOML animation manifests.
 
-Decoding supports static PIXEL resources, standard eZIP, shared-Huffman eZIP,
-and eZIP-A animations. Encoding supports PIXEL resources, standard eZIP, and
-eZIP-A. The RGB565 encoder provides grid-stable ordered dithering and optional
-size-optimized compression.
+## Format support
+
+| Resource or feature | Decode | Encode | Notes |
+| --- | :---: | :---: | --- |
+| Standard static eZIP | Yes | Yes | The encoder writes raw-DEFLATE streams. |
+| Shared-Huffman static eZIP | Yes | No | The encoder emits the simpler standard representation. |
+| eZIP-A animation | Yes | Yes | Supports frame rectangles, timing, repeat counts, blending, and disposal. |
+| Uncompressed PIXEL resources | Yes | Yes | Static RGB and ARGB resources. |
+| RGB565 | Yes | Yes | Optional ordered dithering is available when encoding. |
+| RGB888 | Yes | Yes | Stored in B, G, R byte order. |
+| ARGB565 | Yes | Yes | RGB565 color with a separate alpha byte. |
+| ARGB888 | Yes | Yes | Stored in B, G, R, A byte order. |
+| Paletted eZIP-A | No | No | Palette metadata is recognized, but its pixel semantics are not established. |
+| JPEG and MJPEG | No | No | These are separate media capabilities on some chips, not eZIP resources. |
+
+This table describes EZIPr's software support. It does not certify output for
+the eZip 1.0, 2.0, or 3.0 hardware generations. Standard static eZIP is the
+most conservative output; eZIP-A requires a target that supports native
+animation. Compatibility must currently be checked against the selected chip
+and SDK.
 
 Animated resources expose stored frame rectangles and a sequential compositor
-that applies blending and disposal. Animation encoding accepts frame
-rectangles, timing, disposal, blending, and repeat metadata.
+that applies blending and disposal. The RGB565 encoder provides grid-stable
+ordered dithering and optional size-optimized compression.
 
 The library accepts caller-owned RGB or RGBA buffers and returns owned encoded
 resources or decoded images. A minimal static round trip looks like this:
