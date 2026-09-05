@@ -123,3 +123,7 @@ encoding and 40 seconds with `--smallest`. The resulting resource is typically
 Library users enable `CompressionStrategy::Smallest` with the `smallest` Cargo
 feature. The `cli` feature includes it automatically; normal encoding and
 decoding do not require Zopfli.
+
+## License
+
+EZIPr is licensed under the MIT License.

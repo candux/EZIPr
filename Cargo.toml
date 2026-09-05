@@ -1,5 +1,6 @@
 [package]
 name = "ezipr"
+version = "0.9.0"
 description = "Rust library and command-line tools for SiFli eZIP image resources"
 license = "MIT"
 edition = "2024"
