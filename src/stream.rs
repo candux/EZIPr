@@ -763,7 +763,7 @@ pub(crate) fn unfilter(
     Ok(Unfiltered { pixels, warnings })
 }
 
-fn paeth(left: u8, up: u8, up_left: u8) -> u8 {
+pub(crate) fn paeth(left: u8, up: u8, up_left: u8) -> u8 {
     let left = i32::from(left);
     let up = i32::from(up);
     let up_left = i32::from(up_left);

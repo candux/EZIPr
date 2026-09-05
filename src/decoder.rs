@@ -488,11 +488,10 @@ impl<'a> Decoder<'a> {
             .in_frame(index));
         }
         let mut compositor = self.compositor(output)?;
-        let mut image = None;
-        for _ in 0..=index {
-            image = compositor.next_frame()?;
+        for _ in 0..index {
+            compositor.advance()?;
         }
-        image.ok_or_else(|| {
+        compositor.next_frame()?.ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidAnimation,
                 "animation ended before the requested frame",

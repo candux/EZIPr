@@ -1,3 +1,4 @@
+use crate::stream::paeth;
 use crate::{
     Error, ErrorKind, ImageView, PixelFormat, ResourceFormat, ResourceHeader, Result, StorageFormat,
 };
@@ -367,11 +368,16 @@ fn compress_pixels_miniz(
         };
     }
 
-    let mut candidates = vec![baseline];
+    let mut best = CompressionResult {
+        compressed: miniz_oxide::deflate::compress_to_vec(&baseline.1, options.level()),
+        filtered: baseline.1.clone(),
+        has_row_filters: baseline.0,
+    };
+    search_candidate(&mut best, baseline.0, baseline.1, Some(options.level()));
     if options.uses_row_filters() {
         for filter in 0..=4 {
-            push_unique_candidate(
-                &mut candidates,
+            search_candidate(
+                &mut best,
                 true,
                 filter_rows_fixed(
                     pixels,
@@ -381,34 +387,13 @@ fn compress_pixels_miniz(
                     options.rows_per_block(),
                     filter,
                 ),
+                None,
             );
         }
         if allow_filterless_candidate {
-            push_unique_candidate(&mut candidates, false, pixels.to_vec());
+            search_candidate(&mut best, false, pixels.to_vec(), None);
         }
     }
-
-    let mut best = CompressionResult {
-        compressed: miniz_oxide::deflate::compress_to_vec(&candidates[0].1, options.level()),
-        filtered: candidates[0].1.clone(),
-        has_row_filters: candidates[0].0,
-    };
-    for (candidate_index, (has_row_filters, filtered)) in candidates.iter().enumerate() {
-        for level in 0..=10 {
-            if candidate_index == 0 && level == options.level() {
-                continue;
-            }
-            let compressed = miniz_oxide::deflate::compress_to_vec(filtered, level);
-            if compressed.len() < best.compressed.len() {
-                best = CompressionResult {
-                    filtered: filtered.clone(),
-                    compressed,
-                    has_row_filters: *has_row_filters,
-                };
-            }
-        }
-    }
-
     best
 }
 
@@ -471,16 +456,32 @@ pub(crate) fn optimize_with_zopfli(_best: CompressionResult) -> Result<Compressi
     ))
 }
 
-fn push_unique_candidate(
-    candidates: &mut Vec<(bool, Vec<u8>)>,
+fn search_candidate(
+    best: &mut CompressionResult,
     has_row_filters: bool,
     filtered: Vec<u8>,
+    seed_level: Option<u8>,
 ) {
-    if !candidates
-        .iter()
-        .any(|candidate| candidate.0 == has_row_filters && candidate.1 == filtered)
+    // Retain only the winner and current candidate. Identical winning data has
+    // already been searched, except on the initial baseline pass.
+    if seed_level.is_none() && best.has_row_filters == has_row_filters && best.filtered == filtered
     {
-        candidates.push((has_row_filters, filtered));
+        return;
+    }
+    let mut improved = false;
+    for level in 0..=10 {
+        if seed_level == Some(level) {
+            continue;
+        }
+        let compressed = miniz_oxide::deflate::compress_to_vec(&filtered, level);
+        if compressed.len() < best.compressed.len() {
+            best.compressed = compressed;
+            improved = true;
+        }
+    }
+    if improved {
+        best.filtered = filtered;
+        best.has_row_filters = has_row_filters;
     }
 }
 
@@ -750,25 +751,6 @@ fn filter_score(row: &[u8]) -> u64 {
     row.iter()
         .map(|&value| u64::from(value.min(value.wrapping_neg())))
         .sum()
-}
-
-fn paeth(left: u8, up: u8, up_left: u8) -> u8 {
-    let left = i32::from(left);
-    let up = i32::from(up);
-    let up_left = i32::from(up_left);
-    let prediction = left + up - up_left;
-    let distances = [
-        (prediction - left).abs(),
-        (prediction - up).abs(),
-        (prediction - up_left).abs(),
-    ];
-    if distances[0] <= distances[1] && distances[0] <= distances[2] {
-        left as u8
-    } else if distances[1] <= distances[2] {
-        up as u8
-    } else {
-        up_left as u8
-    }
 }
 
 #[cfg(test)]
