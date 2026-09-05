@@ -145,6 +145,22 @@ pub(crate) fn inflate_stream(
     if header.uses_shared_huffman() {
         return inflate_shared(stream, header, max_output, mode, warnings);
     }
+    if header.control() & 0xf0 != 0x10 {
+        let message = format!(
+            "unsupported eZIP representation {:#04x}",
+            header.control() & 0xf0
+        );
+        if mode == DecodeMode::Strict {
+            return Err(Error::new(ErrorKind::UnsupportedFormat, message).at_offset(4));
+        }
+        warnings.push(
+            Warning::new(
+                WarningKind::MetadataMismatch,
+                format!("{message}; attempting standard raw-DEFLATE decoding"),
+            )
+            .at_offset(4),
+        );
+    }
     let declared_size = header.data_size as usize;
     let minimum = StreamHeader::BYTE_LEN + StreamHeader::CHECKSUM_LEN;
     if declared_size < minimum {

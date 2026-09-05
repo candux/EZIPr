@@ -5,6 +5,33 @@ fn one_pixel() -> ImageView<'static> {
 }
 
 #[test]
+fn unknown_representations_require_explicit_diagnostic_recovery() {
+    let encoded = Encoder::default().encode(one_pixel()).unwrap();
+    for representation in [0x00, 0x20, 0x30, 0x60, 0x80, 0xf0] {
+        let mut bytes = encoded.as_bytes().to_vec();
+        bytes[8] = representation | (bytes[8] & 15);
+        assert_eq!(
+            Decoder::new(&bytes).unwrap_err().kind(),
+            ErrorKind::UnsupportedFormat
+        );
+        let decoder =
+            Decoder::with_options(&bytes, DecodeOptions::new().mode(DecodeMode::Diagnostic))
+                .unwrap();
+        assert!(
+            decoder
+                .warnings()
+                .iter()
+                .any(|warning| warning.kind() == WarningKind::MetadataMismatch
+                    && warning.message().contains("attempting standard"))
+        );
+        assert_eq!(
+            decoder.decode_frame(0, PixelFormat::Rgb8).unwrap().pixels(),
+            &[82, 80, 82]
+        );
+    }
+}
+
+#[test]
 fn four_pixel_layout_ambiguity_is_reported_and_valid_crc_wins() {
     let source = [
         255, 0, 0, 37, 0, 255, 0, 81, 0, 0, 255, 129, 255, 255, 255, 255,
