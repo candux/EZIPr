@@ -9,14 +9,18 @@ PNG and APNG, imports GIF animations, and accepts TOML animation manifests.
 | Resource or feature | Decode | Encode | Notes |
 | --- | :---: | :---: | --- |
 | Standard static eZIP | Yes | Yes | The encoder writes raw-DEFLATE streams. |
-| Shared-Huffman static eZIP | Yes | No | The encoder emits the simpler standard representation. |
-| eZIP-A animation | Yes | Yes | Supports frame rectangles, timing, repeat counts, blending, and disposal. |
+| Shared-Huffman static eZIP | Yes | No | CRC-bearing and trailerless containers are accepted; the encoder emits the simpler standard representation. |
+| eZIP-A animation | Yes | Yes | Supports frame rectangles, timing, repeat counts, blending, and disposal. CRC-bearing and trailerless containers are accepted. |
+| AGIF animation | No | No | GIF files can be imported and encoded as eZIP-A, but the distinct AGIF container is not supported. |
 | Uncompressed PIXEL resources | Yes | Yes | Static RGB and ARGB resources. |
 | RGB565 | Yes | Yes | Optional ordered dithering is available when encoding. |
 | RGB888 | Yes | Yes | Stored in B, G, R byte order. |
 | ARGB565 | Yes | Yes | RGB565 color with a separate alpha byte. |
 | ARGB888 | Yes | Yes | Stored in B, G, R, A byte order. |
-| Paletted eZIP-A | No | No | Palette metadata is recognized, but its pixel semantics are not established. |
+| Grayscale | No | No | Grayscale source images are converted to RGB or RGBA. |
+| Grayscale with alpha | No | No | Grayscale-alpha source images are converted to RGBA. |
+| Indexed palette resources | No | No | Palette metadata is recognized, but its storage semantics are not yet implemented. |
+| Chip-specific encoder profiles | N/A | No | The encoder does not currently alter output for a selected SF32 family. |
 | JPEG and MJPEG | No | No | These are separate media capabilities on some chips, not eZIP resources. |
 
 This table describes EZIPr's software support. It does not certify output for
