@@ -39,6 +39,7 @@ ezipr decode animation.bin --frames frames
 ezipr encode image.png image.bin --depth rgb565
 ezipr encode image.png image.bin --depth rgb565 --dither none
 ezipr encode image.png image.bin --depth rgb565 --dither reference
+ezipr encode image.png image.bin --smallest
 ezipr encode animation.apng animation.bin --depth rgb888
 ezipr encode animation.gif animation.bin
 ```
@@ -103,3 +104,25 @@ RGB565 resources made with different dithering settings can therefore decode
 to slightly different colors even when both files are valid. RGB888 does not
 require this quantization, and the dithering option has no effect on RGB888 or
 ARGB888 output.
+
+## Size-optimized encoding
+
+`ezipr encode input.png output.bin --smallest` enables an exhaustive,
+deterministic search over the encoder's current compression candidates. It
+tries the adaptive PNG row-filter plan, plans using each single PNG filter,
+and filterless storage. Every candidate is compressed with every miniz level
+from 0 through 10. Zopfli is then run on the best representation found, and
+its raw-DEFLATE stream is retained only when it is smaller.
+
+For animations, every frame's filter plan and compressed stream are optimized
+independently. Because eZIP-A stores one filter-mode flag for the entire
+animation, filtered and filterless results are compared by their total frame
+size and the smaller mode is used consistently for every frame. Use
+`--no-filters` to search only filterless frame data.
+
+The result is guaranteed not to exceed the normal configured candidate, but
+it is the smallest of the candidates described above rather than a proof of
+the globally smallest possible DEFLATE stream. Encoding can be much slower,
+especially for large images, while decoding speed and compatibility are
+unchanged. `--compression` still selects the single-pass level without
+`--smallest` and supplies the baseline candidate when optimization is enabled.

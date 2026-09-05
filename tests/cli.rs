@@ -98,6 +98,43 @@ fn static_png_decode_encode_round_trip_uses_requested_layout() {
 }
 
 #[test]
+fn smallest_cli_output_is_no_larger_and_decodes_identically() {
+    let directory = TestDirectory::new();
+    let normal = directory.join("normal.bin");
+    let smallest = directory.join("smallest.bin");
+    let source = "tests/fixtures/static/source-rgba.png";
+
+    assert_success(ezipr(&[
+        "encode",
+        source,
+        path_text(&normal),
+        "--depth",
+        "rgb888",
+    ]));
+    assert_success(ezipr(&[
+        "encode",
+        source,
+        path_text(&smallest),
+        "--depth",
+        "rgb888",
+        "--smallest",
+    ]));
+
+    let normal = fs::read(normal).expect("read normal output");
+    let smallest = fs::read(smallest).expect("read smallest output");
+    assert!(smallest.len() <= normal.len());
+    let normal = Decoder::new(&normal)
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgba8)
+        .unwrap();
+    let smallest = Decoder::new(&smallest)
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgba8)
+        .unwrap();
+    assert_eq!(smallest, normal);
+}
+
+#[test]
 fn rgb565_cli_defaults_to_balanced_dithering_and_exposes_other_modes() {
     let directory = TestDirectory::new();
     let png = directory.join("black.png");

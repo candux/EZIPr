@@ -330,6 +330,55 @@ impl AnimationEncoder {
             crate::encoder::resolve_resource_format(ResourceEncoding::Ezip, storage);
         let outer = ResourceHeader::new(resource_format, self.width, self.height)?;
 
+        let mut stored_frames = Vec::with_capacity(self.frames.len());
+        for frame in &self.frames {
+            let stride = frame.width as usize * frame.format.bytes_per_pixel();
+            let image = ImageView::new(
+                frame.width,
+                frame.height,
+                frame.format,
+                stride,
+                &frame.pixels,
+            )?;
+            stored_frames.push(crate::encoder::encode_storage_pixels(
+                image,
+                storage,
+                self.options.rgb565_dithering(),
+                frame.x_offset,
+                frame.y_offset,
+            )?);
+        }
+        let compress_frames = |options| {
+            self.frames
+                .iter()
+                .zip(&stored_frames)
+                .map(|(frame, stored)| {
+                    crate::encoder::compress_animation_pixels(
+                        stored,
+                        frame.width as usize,
+                        frame.height as usize,
+                        storage.bytes_per_pixel(),
+                        options,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let mut compressed_frames = compress_frames(self.options)?;
+        if self.options.strategy() == crate::CompressionStrategy::Smallest
+            && self.options.uses_row_filters()
+        {
+            let filterless_frames = compress_frames(self.options.row_filters(false))?;
+            let total_size = |frames: &[crate::encoder::CompressionResult]| {
+                frames.iter().fold(0_usize, |total, frame| {
+                    total.saturating_add(frame.compressed.len())
+                })
+            };
+            if total_size(&filterless_frames) < total_size(&compressed_frames) {
+                compressed_frames = filterless_frames;
+            }
+        }
+        let has_row_filters = compressed_frames[0].has_row_filters;
+
         let table_len = self
             .frames
             .len()
@@ -344,7 +393,7 @@ impl AnimationEncoder {
         inner.push(0);
         inner.extend_from_slice(&self.width.to_be_bytes());
         inner.extend_from_slice(&self.height.to_be_bytes());
-        inner.push(u8::from(!self.options.uses_row_filters()));
+        inner.push(u8::from(!has_row_filters));
         inner.extend_from_slice(&[0, 0, 0]);
         inner.extend_from_slice(&frame_count.to_be_bytes());
         let play_count = match self.repeat {
@@ -356,7 +405,12 @@ impl AnimationEncoder {
         inner.resize(table_offset + table_len, 0);
 
         let mut offsets = Vec::with_capacity(self.frames.len());
-        for (index, frame) in self.frames.iter().enumerate() {
+        for (index, (frame, result)) in self
+            .frames
+            .iter()
+            .zip(compressed_frames.into_iter())
+            .enumerate()
+        {
             if index != 0 {
                 while inner.len() % 4 != 0 {
                     inner.push(0);
@@ -381,40 +435,14 @@ impl AnimationEncoder {
                 BlendMode::Source => 0,
                 BlendMode::Over => 1,
             });
-            let stride = frame.width as usize * frame.format.bytes_per_pixel();
-            let image = ImageView::new(
-                frame.width,
-                frame.height,
-                frame.format,
-                stride,
-                &frame.pixels,
-            )?;
-            let stored = crate::encoder::encode_storage_pixels(
-                image,
-                storage,
-                self.options.rgb565_dithering(),
-                frame.x_offset,
-                frame.y_offset,
-            )?;
-            let filtered = if self.options.uses_row_filters() {
-                crate::encoder::filter_rows(
-                    &stored,
-                    frame.width as usize,
-                    frame.height as usize,
-                    storage.bytes_per_pixel(),
-                    self.options.rows_per_block(),
-                )
-            } else {
-                stored
-            };
-            let compressed = miniz_oxide::deflate::compress_to_vec(&filtered, self.options.level());
-            let compressed_size = u32::try_from(compressed.len()).map_err(|_| {
+            let compressed_size = u32::try_from(result.compressed.len()).map_err(|_| {
                 Error::new(ErrorKind::LimitExceeded, "compressed frame exceeds 32 bits")
             })?;
             inner.extend_from_slice(&((compressed_size >> 16) as u16).to_be_bytes());
             inner.extend_from_slice(&(compressed_size as u16).to_be_bytes());
-            inner.extend_from_slice(&compressed);
-            let checksum = miniz_oxide::mz_adler32_oxide(miniz_oxide::MZ_ADLER32_INIT, &filtered);
+            inner.extend_from_slice(&result.compressed);
+            let checksum =
+                miniz_oxide::mz_adler32_oxide(miniz_oxide::MZ_ADLER32_INIT, &result.filtered);
             inner.extend_from_slice(&checksum.to_be_bytes());
         }
         for (index, offset) in offsets.into_iter().enumerate() {

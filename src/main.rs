@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ezipr::{
-    AlphaMode, AnimationEncoder, BlendMode, ColorDepth, DecodeMode, DecodeOptions, Decoder,
-    DisposalMethod, EncodeOptions, Encoder, FrameView, ImageView, PixelFormat, Repeat,
-    ResourceEncoding, ResourceKind, Rgb565Dithering,
+    AlphaMode, AnimationEncoder, BlendMode, ColorDepth, CompressionStrategy, DecodeMode,
+    DecodeOptions, Decoder, DisposalMethod, EncodeOptions, Encoder, FrameView, ImageView,
+    PixelFormat, Repeat, ResourceEncoding, ResourceKind, Rgb565Dithering,
 };
 use serde::Deserialize;
 
@@ -97,6 +97,9 @@ struct EncodeArgs {
     /// DEFLATE compression level.
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=10))]
     compression: Option<u8>,
+    /// Spend substantially more time searching for the smallest output.
+    #[arg(long, conflicts_with = "pixel")]
+    smallest: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -485,7 +488,12 @@ fn build_options(args: &EncodeArgs, manifest: Option<ManifestOptions>) -> CliRes
         .resource_encoding(encoding)
         .row_filters(filters)
         .block_rows(block_rows)?
-        .compression_level(compression)?;
+        .compression_level(compression)?
+        .compression_strategy(if args.smallest {
+            CompressionStrategy::Smallest
+        } else {
+            CompressionStrategy::Fast
+        });
     Ok(options)
 }
 

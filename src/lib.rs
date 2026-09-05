@@ -14,8 +14,8 @@ pub use animation::{
 };
 pub use decoder::{DecodeLimits, DecodeMode, DecodeOptions, Decoder, ResourceInfo};
 pub use encoder::{
-    AlphaMode, ColorDepth, EncodeOptions, EncodedResource, Encoder, ResourceEncoding,
-    Rgb565Dithering,
+    AlphaMode, ColorDepth, CompressionStrategy, EncodeOptions, EncodedResource, Encoder,
+    ResourceEncoding, Rgb565Dithering,
 };
 pub use error::{Error, ErrorKind, Result, Warning, WarningKind};
 pub use header::{ResourceFormat, ResourceHeader, ResourceKind};

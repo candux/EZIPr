@@ -1,7 +1,7 @@
 use ezipr::{
-    AlphaMode, AnimationEncoder, BlendMode, ColorDepth, Decoder, DisposalMethod, EncodeOptions,
-    FrameView, ImageView, PixelFormat, Repeat, ResourceFormat, ResourceKind, Rgb565Dithering,
-    StorageFormat,
+    AlphaMode, AnimationEncoder, BlendMode, ColorDepth, CompressionStrategy, Decoder,
+    DisposalMethod, EncodeOptions, FrameView, ImageView, PixelFormat, Repeat, ResourceFormat,
+    ResourceKind, Rgb565Dithering, StorageFormat,
 };
 
 fn solid_rgba(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
@@ -212,4 +212,39 @@ fn animation_output_is_deterministic_for_the_locked_graph() {
     let second = encoded_animation();
     assert_eq!(first, second);
     assert_eq!(crc32fast::hash(first.as_bytes()), 0xb816_1c5d);
+}
+
+#[test]
+fn smallest_strategy_optimizes_animation_frames_without_changing_pixels() {
+    let pixels: Vec<_> = (0_u8..16)
+        .flat_map(|y| {
+            (0_u8..16).flat_map(move |x| [x.wrapping_mul(16), y.wrapping_mul(16), x ^ y, 255])
+        })
+        .collect();
+    let image = ImageView::new(16, 16, PixelFormat::Rgba8, 16 * 4, &pixels).unwrap();
+    let base_options = EncodeOptions::new(ColorDepth::Rgb888).alpha_mode(AlphaMode::Discard);
+
+    let encode = |options| {
+        let mut encoder = AnimationEncoder::new(16, 16, Repeat::Finite(1), options).unwrap();
+        encoder
+            .push_frame(FrameView::new(image, 0, 0, 1, 10))
+            .unwrap();
+        encoder.finish().unwrap()
+    };
+    let baseline = encode(base_options);
+    let smallest_options = base_options.compression_strategy(CompressionStrategy::Smallest);
+    let smallest = encode(smallest_options);
+    let repeated = encode(smallest_options);
+
+    assert!(smallest.as_bytes().len() <= baseline.as_bytes().len());
+    assert_eq!(smallest, repeated);
+    let decoded = Decoder::new(smallest.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    let expected: Vec<_> = pixels
+        .chunks_exact(4)
+        .flat_map(|pixel| pixel[..3].iter().copied())
+        .collect();
+    assert_eq!(decoded.pixels(), expected);
 }

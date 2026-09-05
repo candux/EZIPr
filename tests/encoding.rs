@@ -1,6 +1,7 @@
 use ezipr::{
-    AlphaMode, ColorDepth, DecodeMode, DecodeOptions, Decoder, EncodeOptions, Encoder, ImageView,
-    PixelFormat, ResourceEncoding, Rgb565Dithering, StorageFormat, StreamHeader,
+    AlphaMode, ColorDepth, CompressionStrategy, DecodeMode, DecodeOptions, Decoder, EncodeOptions,
+    Encoder, ImageView, PixelFormat, ResourceEncoding, Rgb565Dithering, StorageFormat,
+    StreamHeader,
 };
 
 const RGBA: &[u8] = &[
@@ -278,4 +279,44 @@ fn argb565_dithering_preserves_alpha_bytes() {
             .collect::<Vec<_>>(),
         (0..64).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn smallest_strategy_is_deterministic_no_larger_and_pixel_equivalent() {
+    let pixels: Vec<_> = (0_u8..64)
+        .flat_map(|y| {
+            (0_u8..64).flat_map(move |x| {
+                [
+                    x.wrapping_mul(4),
+                    y.wrapping_mul(4),
+                    x.wrapping_mul(3) ^ y.wrapping_mul(5),
+                ]
+            })
+        })
+        .collect();
+    let image = ImageView::new(64, 64, PixelFormat::Rgb8, 64 * 3, &pixels).unwrap();
+    let options = EncodeOptions::new(ColorDepth::Rgb888).alpha_mode(AlphaMode::Discard);
+    let baseline = Encoder::new(options).encode(image).unwrap();
+    let smallest_options = options.compression_strategy(CompressionStrategy::Smallest);
+    let smallest = Encoder::new(smallest_options).encode(image).unwrap();
+    let repeated = Encoder::new(smallest_options).encode(image).unwrap();
+
+    assert!(smallest.as_bytes().len() <= baseline.as_bytes().len());
+    assert_eq!(smallest, repeated);
+    let decoded = Decoder::new(smallest.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    assert_eq!(decoded.pixels(), pixels);
+}
+
+#[test]
+fn smallest_strategy_honors_explicit_filterless_mode() {
+    let options = EncodeOptions::new(ColorDepth::Rgb888)
+        .alpha_mode(AlphaMode::Discard)
+        .row_filters(false)
+        .compression_strategy(CompressionStrategy::Smallest);
+    let encoded = Encoder::new(options).encode(image()).unwrap();
+    let stream = StreamHeader::parse(&encoded.as_bytes()[4..]).unwrap();
+    assert!(!stream.has_row_filters());
 }

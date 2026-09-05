@@ -46,6 +46,17 @@ pub enum Rgb565Dithering {
     Reference8x8,
 }
 
+/// Strategy used to select the filtered representation and DEFLATE stream.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CompressionStrategy {
+    /// Compress the requested row-filter plan once at the configured level.
+    #[default]
+    Fast,
+    /// Search deterministic filter plans and compressors for the smallest result.
+    Smallest,
+}
+
 /// Options controlling static resource encoding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EncodeOptions {
@@ -56,6 +67,7 @@ pub struct EncodeOptions {
     block_rows: u8,
     row_filters: bool,
     compression_level: u8,
+    compression_strategy: CompressionStrategy,
 }
 
 impl Default for EncodeOptions {
@@ -68,6 +80,7 @@ impl Default for EncodeOptions {
             block_rows: 32,
             row_filters: true,
             compression_level: 6,
+            compression_strategy: CompressionStrategy::Fast,
         }
     }
 }
@@ -122,6 +135,11 @@ impl EncodeOptions {
         Ok(self)
     }
 
+    pub fn compression_strategy(mut self, strategy: CompressionStrategy) -> Self {
+        self.compression_strategy = strategy;
+        self
+    }
+
     pub const fn color_depth(self) -> ColorDepth {
         self.color_depth
     }
@@ -148,6 +166,10 @@ impl EncodeOptions {
 
     pub const fn level(self) -> u8 {
         self.compression_level
+    }
+
+    pub const fn strategy(self) -> CompressionStrategy {
+        self.compression_strategy
     }
 }
 
@@ -237,23 +259,15 @@ impl Encoder {
                 bytes.extend_from_slice(&crc32fast::hash(&stored_pixels).to_le_bytes());
             }
             ResourceEncoding::Ezip => {
-                let filtered = if self.options.row_filters {
-                    filter_rows(
-                        &stored_pixels,
-                        width as usize,
-                        height as usize,
-                        storage_format.bytes_per_pixel(),
-                        self.options.block_rows,
-                    )
-                } else {
-                    stored_pixels.clone()
-                };
-                let compressed = miniz_oxide::deflate::compress_to_vec(
-                    &filtered,
-                    self.options.compression_level,
-                );
+                let result = compress_pixels(
+                    &stored_pixels,
+                    width as usize,
+                    height as usize,
+                    storage_format.bytes_per_pixel(),
+                    self.options,
+                )?;
                 let stream_size = crate::StreamHeader::BYTE_LEN
-                    .checked_add(compressed.len())
+                    .checked_add(result.compressed.len())
                     .and_then(|size| size.checked_add(crate::StreamHeader::CHECKSUM_LEN))
                     .and_then(|size| u32::try_from(size).ok())
                     .ok_or_else(|| {
@@ -266,15 +280,148 @@ impl Encoder {
                 bytes.push(0);
                 bytes.extend_from_slice(&width.to_be_bytes());
                 bytes.extend_from_slice(&height.to_be_bytes());
-                bytes.push(u8::from(!self.options.row_filters));
+                bytes.push(u8::from(!result.has_row_filters));
                 bytes.extend_from_slice(&[0, 0, 0]);
-                bytes.extend_from_slice(&compressed);
+                bytes.extend_from_slice(&result.compressed);
                 let checksum =
-                    miniz_oxide::mz_adler32_oxide(miniz_oxide::MZ_ADLER32_INIT, &filtered);
+                    miniz_oxide::mz_adler32_oxide(miniz_oxide::MZ_ADLER32_INIT, &result.filtered);
                 bytes.extend_from_slice(&checksum.to_be_bytes());
             }
         }
         Ok(EncodedResource::new(bytes, storage_format, resource_format))
+    }
+}
+
+pub(crate) struct CompressionResult {
+    pub filtered: Vec<u8>,
+    pub compressed: Vec<u8>,
+    pub has_row_filters: bool,
+}
+
+pub(crate) fn compress_pixels(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    bytes_per_pixel: usize,
+    options: EncodeOptions,
+) -> Result<CompressionResult> {
+    compress_pixels_impl(pixels, width, height, bytes_per_pixel, options, true)
+}
+
+pub(crate) fn compress_animation_pixels(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    bytes_per_pixel: usize,
+    options: EncodeOptions,
+) -> Result<CompressionResult> {
+    // eZIP-A has one filter-mode flag for every frame, so a frame must not
+    // independently switch the whole animation to filterless storage.
+    compress_pixels_impl(pixels, width, height, bytes_per_pixel, options, false)
+}
+
+fn compress_pixels_impl(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    bytes_per_pixel: usize,
+    options: EncodeOptions,
+    allow_filterless_candidate: bool,
+) -> Result<CompressionResult> {
+    let baseline = if options.uses_row_filters() {
+        (
+            true,
+            filter_rows(
+                pixels,
+                width,
+                height,
+                bytes_per_pixel,
+                options.rows_per_block(),
+            ),
+        )
+    } else {
+        (false, pixels.to_vec())
+    };
+    if options.strategy() == CompressionStrategy::Fast {
+        let compressed = miniz_oxide::deflate::compress_to_vec(&baseline.1, options.level());
+        return Ok(CompressionResult {
+            filtered: baseline.1,
+            compressed,
+            has_row_filters: baseline.0,
+        });
+    }
+
+    let mut candidates = vec![baseline];
+    if options.uses_row_filters() {
+        for filter in 0..=4 {
+            push_unique_candidate(
+                &mut candidates,
+                true,
+                filter_rows_fixed(
+                    pixels,
+                    width,
+                    height,
+                    bytes_per_pixel,
+                    options.rows_per_block(),
+                    filter,
+                ),
+            );
+        }
+        if allow_filterless_candidate {
+            push_unique_candidate(&mut candidates, false, pixels.to_vec());
+        }
+    }
+
+    let mut best = CompressionResult {
+        compressed: miniz_oxide::deflate::compress_to_vec(&candidates[0].1, options.level()),
+        filtered: candidates[0].1.clone(),
+        has_row_filters: candidates[0].0,
+    };
+    for (candidate_index, (has_row_filters, filtered)) in candidates.iter().enumerate() {
+        for level in 0..=10 {
+            if candidate_index == 0 && level == options.level() {
+                continue;
+            }
+            let compressed = miniz_oxide::deflate::compress_to_vec(filtered, level);
+            if compressed.len() < best.compressed.len() {
+                best = CompressionResult {
+                    filtered: filtered.clone(),
+                    compressed,
+                    has_row_filters: *has_row_filters,
+                };
+            }
+        }
+    }
+
+    let mut zopfli = Vec::new();
+    zopfli::compress(
+        zopfli::Options::default(),
+        zopfli::Format::Deflate,
+        best.filtered.as_slice(),
+        &mut zopfli,
+    )
+    .map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidCompression,
+            format!("Zopfli compression failed: {error}"),
+        )
+    })?;
+    if zopfli.len() < best.compressed.len() {
+        best.compressed = zopfli;
+    }
+    Ok(best)
+}
+
+fn push_unique_candidate(
+    candidates: &mut Vec<(bool, Vec<u8>)>,
+    has_row_filters: bool,
+    filtered: Vec<u8>,
+) {
+    if !candidates
+        .iter()
+        .any(|candidate| candidate.0 == has_row_filters && candidate.1 == filtered)
+    {
+        candidates.push((has_row_filters, filtered));
     }
 }
 
@@ -474,6 +621,34 @@ pub(crate) fn filter_rows(
         }
         output.push(best_filter);
         output.extend_from_slice(&best);
+    }
+    output
+}
+
+fn filter_rows_fixed(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    bytes_per_pixel: usize,
+    block_rows: u8,
+    filter: u8,
+) -> Vec<u8> {
+    let stride = width * bytes_per_pixel;
+    let mut output = Vec::with_capacity(pixels.len() + height);
+    for row in 0..height {
+        let current = &pixels[row * stride..(row + 1) * stride];
+        let previous = if row % block_rows as usize == 0 {
+            None
+        } else {
+            Some(&pixels[(row - 1) * stride..row * stride])
+        };
+        output.push(filter);
+        output.extend_from_slice(&filter_candidate(
+            current,
+            previous,
+            bytes_per_pixel,
+            filter,
+        ));
     }
     output
 }
