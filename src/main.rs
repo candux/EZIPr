@@ -68,7 +68,8 @@ enum AlphaArg {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum DitherArg {
     None,
-    Ordered,
+    Balanced,
+    Reference,
 }
 
 #[derive(Debug, Args)]
@@ -117,7 +118,8 @@ enum ManifestAlpha {
 #[serde(rename_all = "lowercase")]
 enum ManifestDither {
     None,
-    Ordered,
+    Balanced,
+    Reference,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -458,7 +460,7 @@ fn build_options(args: &EncodeArgs, manifest: Option<ManifestOptions>) -> CliRes
         .dither
         .map(dither_from_arg)
         .or_else(|| manifest.and_then(|value| value.dither.map(dither_from_manifest)))
-        .unwrap_or(Rgb565Dithering::Ordered8x8);
+        .unwrap_or(Rgb565Dithering::Balanced8x8);
     let block_rows = args
         .block_rows
         .or_else(|| manifest.and_then(|value| value.block_rows))
@@ -757,7 +759,8 @@ fn alpha_from_arg(value: AlphaArg) -> AlphaMode {
 fn dither_from_arg(value: DitherArg) -> Rgb565Dithering {
     match value {
         DitherArg::None => Rgb565Dithering::None,
-        DitherArg::Ordered => Rgb565Dithering::Ordered8x8,
+        DitherArg::Balanced => Rgb565Dithering::Balanced8x8,
+        DitherArg::Reference => Rgb565Dithering::Reference8x8,
     }
 }
 
@@ -779,7 +782,8 @@ fn alpha_from_manifest(value: ManifestAlpha) -> AlphaMode {
 fn dither_from_manifest(value: ManifestDither) -> Rgb565Dithering {
     match value {
         ManifestDither::None => Rgb565Dithering::None,
-        ManifestDither::Ordered => Rgb565Dithering::Ordered8x8,
+        ManifestDither::Balanced => Rgb565Dithering::Balanced8x8,
+        ManifestDither::Reference => Rgb565Dithering::Reference8x8,
     }
 }
 

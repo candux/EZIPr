@@ -38,6 +38,7 @@ ezipr decode image.bin image.png
 ezipr decode animation.bin --frames frames
 ezipr encode image.png image.bin --depth rgb565
 ezipr encode image.png image.bin --depth rgb565 --dither none
+ezipr encode image.png image.bin --depth rgb565 --dither reference
 ezipr encode animation.apng animation.bin --depth rgb888
 ezipr encode animation.gif animation.bin
 ```
@@ -51,7 +52,7 @@ height = 240
 repeat = 0
 depth = "rgb565"
 alpha = "auto"
-dither = "ordered"
+dither = "balanced"
 block_rows = 32
 filters = true
 compression = 6
@@ -77,18 +78,26 @@ A repeat value of zero means infinite playback. Disposal values are `none`,
 ## RGB565 conversion and dithering
 
 RGB565 stores only five red bits, six green bits, and five blue bits. EZIPr
-uses deterministic, component-specific 8x8 ordered dithering by default when
-reducing eight-bit input to RGB565 or ARGB565. Animation frames use their
-absolute canvas coordinates so that the pattern does not shift at frame
-rectangle boundaries. Alpha bytes are never dithered.
+offers three deterministic conversion modes:
 
-The default follows the reference encoder's RGB565 conversion. Callers can
-select `Rgb565Dithering::None`, `--dither none`, or `dither = "none"` in a
-frame manifest to discard the low channel bits directly instead. Direct
-conversion can make banding more visible in smooth gradients. Ordered
-dithering replaces some of that banding with fine pixel-level noise and can
-increase the compressed size substantially because it breaks up repeated
-colors.
+| `--dither` / manifest value | Library value | Behavior |
+| --- | --- | --- |
+| `balanced` | `Rgb565Dithering::Balanced8x8` | Default. Quantizes against the actual 5-bit and 6-bit reconstruction levels and distributes the residual with an 8x8 ordered pattern. Every decoded RGB565 level is a fixed point, including black, white, and saturated primaries. |
+| `reference` | `Rgb565Dithering::Reference8x8` | Reproduces the reference encoder's component-specific 8x8 conversion. It can brighten some pixels that already lie on the RGB565 grid, including black pixels. |
+| `none` | `Rgb565Dithering::None` | Discards the low channel bits directly. This is spatially stable and decode-encode idempotent, but smooth gradients can show more banding. |
+
+Select the same values with `--dither` on the command line or `dither` in an
+animation manifest. Both ordered modes use absolute animation-canvas
+coordinates so the pattern does not shift at frame rectangle boundaries.
+Alpha bytes are never dithered.
+
+Ordered dithering replaces some gradient banding with fine pixel-level noise,
+but the compression cost can be material. With the current encoder, `balanced`
+was 30% larger than `none` across a 19-image UI sample. A synthetic 128x128
+gray gradient was nearly three times larger, while a flat color already on the
+RGB565 reconstruction grid had no size penalty. Measure representative assets
+when flash usage matters. The `reference` mode exists for conversion
+compatibility; `balanced` is the recommended choice for new resources.
 
 RGB565 resources made with different dithering settings can therefore decode
 to slightly different colors even when both files are valid. RGB888 does not

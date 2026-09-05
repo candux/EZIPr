@@ -33,6 +33,15 @@ storage = "rgb565"
 source = "source-rgb.png"
 
 [[resources]]
+file = "ezip-rgb565-reference-dither.bin"
+kind = "ezip"
+storage = "rgb565"
+source = "source-reference-dither.png"
+width = 64
+height = 8
+dither = "reference"
+
+[[resources]]
 file = "ezip-rgb888.bin"
 kind = "ezip"
 storage = "rgb888"

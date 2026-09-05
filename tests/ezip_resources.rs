@@ -1,5 +1,6 @@
 use ezipr::{
-    DecodeMode, DecodeOptions, Decoder, ErrorKind, PixelFormat, ResourceKind, StorageFormat,
+    AlphaMode, ColorDepth, DecodeMode, DecodeOptions, Decoder, EncodeOptions, Encoder, ErrorKind,
+    ImageView, PixelFormat, ResourceEncoding, ResourceKind, Rgb565Dithering, StorageFormat,
     StreamHeader, WarningKind,
 };
 
@@ -52,6 +53,17 @@ fn expected_multiblock_rgb() -> Vec<u8> {
         }
     }
     expected
+}
+
+fn reference_dither_source() -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(64 * 8 * 3);
+    for _y in 0..8 {
+        for x in 0..64 {
+            let remainder = (x / 8) as u8;
+            pixels.extend_from_slice(&[64 + remainder, 96 + remainder % 4, 128 + remainder]);
+        }
+    }
+    pixels
 }
 
 #[test]
@@ -138,6 +150,30 @@ fn decoded_565_colors_are_consistent_and_alpha_is_exact() {
         .collect();
     assert_eq!(opaque.pixels(), alpha_rgb);
     assert_eq!(alpha_values, expected_alpha);
+}
+
+#[test]
+fn reference_dithering_matches_every_matrix_entry_and_remainder() {
+    let pixels = reference_dither_source();
+    let image = ImageView::new(64, 8, PixelFormat::Rgb8, 64 * 3, &pixels).unwrap();
+    let options = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Discard)
+        .resource_encoding(ResourceEncoding::Ezip)
+        .dithering(Rgb565Dithering::Reference8x8);
+    let encoded = Encoder::new(options).encode(image).unwrap();
+    let actual = Decoder::new(encoded.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    let expected = Decoder::new(include_bytes!(
+        "fixtures/static/ezip-rgb565-reference-dither.bin"
+    ))
+    .unwrap()
+    .decode_frame(0, PixelFormat::Rgb8)
+    .unwrap();
+
+    assert_eq!((expected.width(), expected.height()), (64, 8));
+    assert_eq!(actual.pixels(), expected.pixels());
 }
 
 #[test]

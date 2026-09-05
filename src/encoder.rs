@@ -39,9 +39,11 @@ pub enum ResourceEncoding {
 pub enum Rgb565Dithering {
     /// Discard the low channel bits without modifying the input colors.
     None,
-    /// Apply a deterministic, component-specific 8x8 ordered dither.
+    /// Apply quantization-aware 8x8 ordered dithering with stable reconstruction levels.
     #[default]
-    Ordered8x8,
+    Balanced8x8,
+    /// Reproduce the reference encoder's component-specific 8x8 dither.
+    Reference8x8,
 }
 
 /// Options controlling static resource encoding.
@@ -62,7 +64,7 @@ impl Default for EncodeOptions {
             color_depth: ColorDepth::Rgb565,
             alpha_mode: AlphaMode::Auto,
             resource_encoding: ResourceEncoding::Ezip,
-            rgb565_dithering: Rgb565Dithering::Ordered8x8,
+            rgb565_dithering: Rgb565Dithering::Balanced8x8,
             block_rows: 32,
             row_filters: true,
             compression_level: 6,
@@ -361,17 +363,23 @@ pub(crate) fn encode_storage_pixels(
     Ok(output)
 }
 
-const DITHER_RED: [u8; 64] = [
+const BAYER_8X8: [u8; 64] = [
+    0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4, 52, 11, 59, 7, 55, 40,
+    24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49, 13, 61, 34, 18, 46, 30, 33, 17, 45, 29, 10,
+    58, 6, 54, 9, 57, 5, 53, 42, 26, 38, 22, 41, 25, 37, 21,
+];
+
+const REFERENCE_DITHER_RED: [u8; 64] = [
     1, 7, 3, 5, 0, 8, 2, 6, 7, 1, 5, 3, 8, 0, 6, 2, 3, 5, 0, 8, 2, 6, 1, 7, 5, 3, 8, 0, 6, 2, 7, 1,
     0, 8, 2, 6, 1, 7, 3, 5, 8, 0, 6, 2, 7, 1, 5, 3, 2, 6, 1, 7, 3, 5, 0, 8, 6, 2, 7, 1, 5, 3, 8, 0,
 ];
 
-const DITHER_GREEN: [u8; 64] = [
+const REFERENCE_DITHER_GREEN: [u8; 64] = [
     1, 3, 2, 2, 3, 1, 2, 2, 2, 2, 0, 4, 2, 2, 4, 0, 3, 1, 2, 2, 1, 3, 2, 2, 2, 2, 4, 0, 2, 2, 0, 4,
     1, 3, 2, 2, 3, 1, 2, 2, 2, 2, 0, 4, 2, 2, 4, 0, 3, 1, 2, 2, 1, 3, 2, 2, 2, 2, 4, 0, 2, 2, 0, 4,
 ];
 
-const DITHER_BLUE: [u8; 64] = [
+const REFERENCE_DITHER_BLUE: [u8; 64] = [
     5, 3, 8, 0, 6, 2, 7, 1, 3, 5, 0, 8, 2, 6, 1, 7, 8, 0, 6, 2, 7, 1, 5, 3, 0, 8, 2, 6, 1, 7, 3, 5,
     6, 2, 7, 1, 5, 3, 8, 0, 2, 6, 1, 7, 3, 5, 0, 8, 7, 1, 5, 3, 8, 0, 6, 2, 1, 7, 3, 5, 0, 8, 2, 6,
 ];
@@ -383,15 +391,40 @@ fn pack_rgb565(
     dithering: Rgb565Dithering,
     dither_index: usize,
 ) -> u16 {
-    let (red, green, blue) = match dithering {
-        Rgb565Dithering::None => (red, green, blue),
-        Rgb565Dithering::Ordered8x8 => (
-            red.saturating_add(DITHER_RED[dither_index]),
-            green.saturating_add(DITHER_GREEN[dither_index]),
-            blue.saturating_add(DITHER_BLUE[dither_index]),
-        ),
-    };
-    (u16::from(red >> 3) << 11) | (u16::from(green >> 2) << 5) | u16::from(blue >> 3)
+    match dithering {
+        Rgb565Dithering::None => {
+            (u16::from(red >> 3) << 11) | (u16::from(green >> 2) << 5) | u16::from(blue >> 3)
+        }
+        Rgb565Dithering::Balanced8x8 => {
+            let threshold = BAYER_8X8[dither_index];
+            let red = quantize_balanced(red, 31, threshold);
+            let green = quantize_balanced(green, 63, threshold);
+            let blue = quantize_balanced(blue, 31, threshold);
+            (red << 11) | (green << 5) | blue
+        }
+        Rgb565Dithering::Reference8x8 => {
+            let red = red.saturating_add(REFERENCE_DITHER_RED[dither_index]);
+            let green = green.saturating_add(REFERENCE_DITHER_GREEN[dither_index]);
+            let blue = blue.saturating_add(REFERENCE_DITHER_BLUE[dither_index]);
+            (u16::from(red >> 3) << 11) | (u16::from(green >> 2) << 5) | u16::from(blue >> 3)
+        }
+    }
+}
+
+fn quantize_balanced(value: u8, maximum: u16, threshold: u8) -> u16 {
+    if let Some(index) = reconstruction_index(value, maximum) {
+        return index;
+    }
+    let numerator =
+        u32::from(value) * u32::from(maximum) + u32::from(threshold) * u32::from(u8::MAX) / 64;
+    (numerator / u32::from(u8::MAX)) as u16
+}
+
+fn reconstruction_index(value: u8, maximum: u16) -> Option<u16> {
+    let scaled = u32::from(value) * u32::from(maximum);
+    let candidate = scaled.div_ceil(u32::from(u8::MAX)) as u16;
+    (candidate <= maximum && candidate * u16::from(u8::MAX) / maximum == u16::from(value))
+        .then_some(candidate)
 }
 
 pub(crate) const fn color_type(storage: StorageFormat) -> u8 {
@@ -501,5 +534,45 @@ fn paeth(left: u8, up: u8, up_left: u8) -> u8 {
         up as u8
     } else {
         up_left as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quantize_balanced;
+
+    fn error_statistics(maximum: u16) -> (i64, u64, i32) {
+        let mut signed = 0;
+        let mut absolute = 0;
+        let mut worst = 0;
+        for value in 0..=u8::MAX {
+            for threshold in 0..64 {
+                let quantized = quantize_balanced(value, maximum, threshold);
+                let reconstructed = i32::from(quantized) * 255 / i32::from(maximum);
+                let error = reconstructed - i32::from(value);
+                signed += i64::from(error);
+                absolute += u64::from(error.unsigned_abs());
+                worst = worst.max(error.abs());
+            }
+        }
+        (signed, absolute, worst)
+    }
+
+    #[test]
+    fn balanced_quantization_has_bounded_near_zero_error() {
+        assert_eq!(error_statistics(31), (-7_854, 44_162, 8));
+        assert_eq!(error_statistics(63), (-6_240, 20_700, 4));
+    }
+
+    #[test]
+    fn balanced_quantization_preserves_every_reconstruction_level() {
+        for maximum in [31, 63] {
+            for index in 0..=maximum {
+                let value = (index * u16::from(u8::MAX) / maximum) as u8;
+                for threshold in 0..64 {
+                    assert_eq!(quantize_balanced(value, maximum, threshold), index);
+                }
+            }
+        }
     }
 }

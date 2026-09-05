@@ -89,14 +89,14 @@ fn encoded_animation() -> ezipr::EncodedResource {
 }
 
 #[test]
-fn ordered_dithering_uses_animation_canvas_coordinates() {
+fn balanced_dithering_uses_animation_canvas_coordinates() {
     let options = EncodeOptions::new(ColorDepth::Rgb565).alpha_mode(AlphaMode::Preserve);
     let mut encoder = AnimationEncoder::new(8, 8, Repeat::Finite(1), options).unwrap();
     add_frame(
         &mut encoder,
         1,
         1,
-        &[0, 0, 0, 37],
+        &[5, 3, 5, 37],
         3,
         1,
         (1, 10),
@@ -107,7 +107,7 @@ fn ordered_dithering_uses_animation_canvas_coordinates() {
     let encoded = encoder.finish().unwrap();
     let decoder = Decoder::new(encoded.as_bytes()).unwrap();
     let frame = decoder.decode_frame(0, PixelFormat::Rgba8).unwrap();
-    assert_eq!(frame.pixels(), &[0, 4, 8, 37]);
+    assert_eq!(frame.pixels(), &[8, 4, 8, 37]);
 }
 
 #[test]

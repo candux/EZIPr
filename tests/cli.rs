@@ -98,10 +98,12 @@ fn static_png_decode_encode_round_trip_uses_requested_layout() {
 }
 
 #[test]
-fn rgb565_cli_defaults_to_ordered_dithering_and_can_disable_it() {
+fn rgb565_cli_defaults_to_balanced_dithering_and_exposes_other_modes() {
     let directory = TestDirectory::new();
     let png = directory.join("black.png");
-    let ordered_resource = directory.join("ordered.bin");
+    let default_resource = directory.join("default.bin");
+    let balanced_resource = directory.join("balanced.bin");
+    let reference_resource = directory.join("reference.bin");
     let direct_resource = directory.join("direct.bin");
     let file = fs::File::create(&png).expect("create PNG");
     let mut encoder = png::Encoder::new(file, 8, 8);
@@ -116,10 +118,30 @@ fn rgb565_cli_defaults_to_ordered_dithering_and_can_disable_it() {
     assert_success(ezipr(&[
         "encode",
         path_text(&png),
-        path_text(&ordered_resource),
+        path_text(&default_resource),
         "--depth",
         "rgb565",
         "--pixel",
+    ]));
+    assert_success(ezipr(&[
+        "encode",
+        path_text(&png),
+        path_text(&balanced_resource),
+        "--depth",
+        "rgb565",
+        "--pixel",
+        "--dither",
+        "balanced",
+    ]));
+    assert_success(ezipr(&[
+        "encode",
+        path_text(&png),
+        path_text(&reference_resource),
+        "--depth",
+        "rgb565",
+        "--pixel",
+        "--dither",
+        "reference",
     ]));
     assert_success(ezipr(&[
         "encode",
@@ -132,12 +154,21 @@ fn rgb565_cli_defaults_to_ordered_dithering_and_can_disable_it() {
         "none",
     ]));
 
-    let ordered = fs::read(ordered_resource).expect("read ordered resource");
-    let ordered = Decoder::new(&ordered)
+    let default = fs::read(default_resource).expect("read default resource");
+    let balanced = fs::read(balanced_resource).expect("read balanced resource");
+    assert_eq!(default, balanced);
+    let balanced = Decoder::new(&balanced)
         .unwrap()
         .decode_frame(0, PixelFormat::Rgb8)
         .unwrap();
-    assert!(ordered.pixels().iter().any(|&channel| channel != 0));
+    assert!(balanced.pixels().iter().all(|&channel| channel == 0));
+
+    let reference = fs::read(reference_resource).expect("read reference resource");
+    let reference = Decoder::new(&reference)
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    assert!(reference.pixels().iter().any(|&channel| channel != 0));
 
     let direct = fs::read(direct_resource).expect("read direct resource");
     let direct = Decoder::new(&direct)
@@ -193,7 +224,7 @@ height = 4
 repeat = 0
 depth = "rgb888"
 alpha = "preserve"
-dither = "none"
+dither = "reference"
 
 [[frames]]
 file = {:?}

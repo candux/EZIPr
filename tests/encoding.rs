@@ -137,19 +137,81 @@ fn encoded_checksum_is_enforced_independently() {
 fn validates_encoder_options() {
     assert_eq!(
         EncodeOptions::default().rgb565_dithering(),
-        Rgb565Dithering::Ordered8x8
+        Rgb565Dithering::Balanced8x8
     );
     assert!(EncodeOptions::default().block_rows(0).is_err());
     assert!(EncodeOptions::default().compression_level(11).is_err());
 }
 
 #[test]
-fn ordered_dithering_uses_independent_component_thresholds() {
+fn balanced_dithering_preserves_black_and_distributes_quantization_error() {
+    let black = [0; 8 * 8 * 3];
+    let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, &black).unwrap();
+    let options = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Discard)
+        .resource_encoding(ResourceEncoding::Pixel);
+    let encoded = Encoder::new(options).encode(image).unwrap();
+    let decoded = Decoder::new(encoded.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    assert!(decoded.pixels().iter().all(|&channel| channel == 0));
+
+    let pixels: Vec<_> = (0..8 * 8).flat_map(|_| [5, 3, 5]).collect();
+    let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, &pixels).unwrap();
+    let encoded = Encoder::new(options).encode(image).unwrap();
+    let decoded = Decoder::new(encoded.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+
+    let pixel = |x: usize, y: usize| &decoded.pixels()[(y * 8 + x) * 3..][..3];
+    assert_eq!(pixel(0, 0), [0, 0, 0]);
+    assert_eq!(pixel(1, 0), [8, 4, 8]);
+    assert_eq!(pixel(4, 0), [0, 0, 0]);
+    assert_eq!(pixel(7, 0), [8, 4, 8]);
+}
+
+#[test]
+fn balanced_encoding_is_a_fixed_point_across_generations() {
+    let pixels: Vec<_> = (0_u8..64)
+        .flat_map(|value| {
+            [
+                value.wrapping_mul(37),
+                value.wrapping_mul(73),
+                value.wrapping_mul(109),
+            ]
+        })
+        .collect();
+    let options = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Discard)
+        .resource_encoding(ResourceEncoding::Pixel);
+    let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, &pixels).unwrap();
+    let mut encoded = Encoder::new(options).encode(image).unwrap().into_bytes();
+
+    for generation in 2..=5 {
+        let decoded = Decoder::new(&encoded)
+            .unwrap()
+            .decode_frame(0, PixelFormat::Rgb8)
+            .unwrap();
+        let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, decoded.pixels()).unwrap();
+        let next = Encoder::new(options).encode(image).unwrap().into_bytes();
+        assert_eq!(
+            next, encoded,
+            "encoded pixels drifted at generation {generation}"
+        );
+        encoded = next;
+    }
+}
+
+#[test]
+fn reference_dithering_retains_compatibility_behavior() {
     let pixels = [0; 8 * 8 * 3];
     let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, &pixels).unwrap();
     let options = EncodeOptions::new(ColorDepth::Rgb565)
         .alpha_mode(AlphaMode::Discard)
-        .resource_encoding(ResourceEncoding::Pixel);
+        .resource_encoding(ResourceEncoding::Pixel)
+        .dithering(Rgb565Dithering::Reference8x8);
     let encoded = Encoder::new(options).encode(image).unwrap();
     let decoded = Decoder::new(encoded.as_bytes())
         .unwrap()
@@ -161,8 +223,6 @@ fn ordered_dithering_uses_independent_component_thresholds() {
     assert_eq!(pixel(2, 0), [0, 0, 8]);
     assert_eq!(pixel(5, 0), [8, 0, 0]);
     assert_eq!(pixel(3, 1), [0, 4, 8]);
-    assert_eq!(pixel(4, 1), [8, 0, 0]);
-    assert_eq!(pixel(0, 7), [0, 0, 0]);
 }
 
 #[test]
@@ -187,10 +247,14 @@ fn dithering_can_be_disabled_and_does_not_affect_rgb888() {
     let direct = Encoder::new(rgb888.dithering(Rgb565Dithering::None))
         .encode(image)
         .unwrap();
-    let ordered = Encoder::new(rgb888.dithering(Rgb565Dithering::Ordered8x8))
+    let balanced = Encoder::new(rgb888.dithering(Rgb565Dithering::Balanced8x8))
         .encode(image)
         .unwrap();
-    assert_eq!(direct, ordered);
+    let reference = Encoder::new(rgb888.dithering(Rgb565Dithering::Reference8x8))
+        .encode(image)
+        .unwrap();
+    assert_eq!(direct, balanced);
+    assert_eq!(direct, reference);
 }
 
 #[test]
