@@ -192,6 +192,30 @@ fn validates_shared_huffman_crc32() {
 }
 
 #[test]
+fn accepts_shared_huffman_without_optional_crc32() {
+    let mut data = include_bytes!("fixtures/static/ezip-rgb565.bin").to_vec();
+    let declared = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    data.truncate(4 + declared);
+
+    let decoder = Decoder::new(&data).unwrap();
+    assert!(decoder.warnings().is_empty());
+    let image = decoder.decode_frame(0, PixelFormat::Rgb8).unwrap();
+    assert_eq!((image.width(), image.height()), (8, 4));
+}
+
+#[test]
+fn rejects_truncated_shared_huffman_crc32() {
+    let mut data = include_bytes!("fixtures/static/ezip-rgb565.bin").to_vec();
+    let declared = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    data.truncate(4 + declared + 2);
+
+    assert_eq!(
+        Decoder::new(&data).unwrap_err().kind(),
+        ErrorKind::TruncatedData
+    );
+}
+
+#[test]
 fn decodes_shared_huffman_across_multiple_row_blocks() {
     let data = include_bytes!("fixtures/static/ezip-rgb888-multiblock.bin");
     let stream = StreamHeader::parse(&data[4..]).unwrap();

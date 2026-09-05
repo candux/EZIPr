@@ -68,9 +68,10 @@ byte is 8 for RGB888 and ARGB888, 16 for packed RGB565, and 24 for ARGB565.
 ## Shared-Huffman stream
 
 The shared-Huffman representation is fixture-confirmed using source images
-owned by this project. Its declared inner size excludes a four-byte
-little-endian CRC-32 trailer. The CRC covers the entire declared inner stream,
-including its 16-byte header.
+owned by this project. Its declared inner size may be followed by a four-byte
+little-endian CRC-32. When present, the CRC covers the entire declared inner
+stream, including its 16-byte header. Both trailer-bearing and trailerless
+resources are emitted by reference encoder releases.
 
 After the header are a big-endian 16-bit block-row count, a big-endian 16-bit
 block count, one four-byte offset per block, and the bit stream. A single
@@ -89,11 +90,12 @@ nor expected.
 ## eZIP-A animation
 
 Animation streams use control high nibble `0x50`. Like shared-Huffman static
-streams, their declared inner size excludes a little-endian CRC-32 over the
-declared inner bytes. The 16-byte stream header is followed by an optional
-four-byte-per-entry palette, an eight-byte animation control, and a frame
-offset table. Frame and play counts and all offsets are big-endian 32-bit
-values. A play count of zero means infinite repetition.
+streams, their declared inner size may be followed by a little-endian CRC-32
+over the declared inner bytes. Both forms occur in reference encoder output.
+The 16-byte stream header is followed by an optional four-byte-per-entry
+palette, an eight-byte animation control, and a frame offset table. Frame and
+play counts and all offsets are big-endian 32-bit values. A play count of zero
+means infinite repetition.
 
 Frame offsets are relative to the beginning of the inner stream. Each packed
 30-byte frame header contains these big-endian fields:

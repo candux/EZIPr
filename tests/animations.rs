@@ -241,6 +241,38 @@ fn validates_container_and_frame_checksums_with_context() {
 }
 
 #[test]
+fn accepts_animation_without_optional_container_crc32() {
+    let mut data = ANIMATION.to_vec();
+    let declared = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    data.truncate(4 + declared);
+
+    let decoder = Decoder::new(&data).unwrap();
+    assert!(decoder.warnings().is_empty());
+    assert_eq!(decoder.info().frame_count(), 3);
+    assert_eq!(decoder.repeat(), Some(Repeat::Finite(2)));
+    assert_eq!(
+        decoder
+            .decode_frame(2, PixelFormat::Rgba8)
+            .unwrap()
+            .pixels()
+            .len(),
+        4 * 4 * 4
+    );
+}
+
+#[test]
+fn rejects_truncated_animation_container_crc32() {
+    let mut data = ANIMATION.to_vec();
+    let declared = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+    data.truncate(4 + declared + 2);
+
+    assert_eq!(
+        Decoder::new(&data).unwrap_err().kind(),
+        ErrorKind::TruncatedData
+    );
+}
+
+#[test]
 fn enforces_animation_frame_limit() {
     let options = DecodeOptions::new().limits(DecodeLimits::new().max_frames(2));
     assert_eq!(

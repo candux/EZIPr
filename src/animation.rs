@@ -756,24 +756,20 @@ fn validate_container_crc(
             "animation is shorter than its declared size",
         ));
     }
-    let trailer_end = declared.saturating_add(4);
-    if trailer_end > stream.len() {
-        if mode == DecodeMode::Strict {
-            return Err(Error::new(
-                ErrorKind::TruncatedData,
-                "animation has no container CRC-32 trailer",
-            )
-            .at_offset(declared));
-        }
-        warnings.push(
-            Warning::new(
-                WarningKind::MissingChecksum,
-                "animation has no container CRC-32 trailer",
-            )
-            .at_offset(declared),
-        );
+    let trailer_len = stream.len() - declared;
+    if trailer_len == 0 {
         return Ok(());
     }
+    if trailer_len < 4 {
+        let message =
+            format!("animation CRC-32 trailer is truncated: expected 4 bytes, found {trailer_len}");
+        if mode == DecodeMode::Strict {
+            return Err(Error::new(ErrorKind::TruncatedData, message).at_offset(declared));
+        }
+        warnings.push(Warning::new(WarningKind::MissingChecksum, message).at_offset(declared));
+        return Ok(());
+    }
+    let trailer_end = declared + 4;
     let stored = u32::from_le_bytes(
         stream[declared..trailer_end]
             .try_into()

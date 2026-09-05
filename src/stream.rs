@@ -235,8 +235,9 @@ fn inflate_shared(
             ),
         ));
     }
-    let trailer_end = declared_size.saturating_add(4);
-    if trailer_end <= stream.len() {
+    let trailer_len = stream.len() - declared_size;
+    let trailer_end = declared_size + 4;
+    if trailer_len >= 4 {
         let stored = u32::from_le_bytes(
             stream[declared_size..trailer_end]
                 .try_into()
@@ -256,22 +257,16 @@ fn inflate_shared(
                 Warning::new(WarningKind::ChecksumMismatch, message).at_offset(declared_size),
             );
         }
-    } else if mode == DecodeMode::Strict {
-        return Err(Error::new(
-            ErrorKind::TruncatedData,
-            "shared-Huffman eZIP stream has no CRC-32 trailer",
-        )
-        .at_offset(declared_size));
-    } else {
-        warnings.push(
-            Warning::new(
-                WarningKind::MissingChecksum,
-                "shared-Huffman eZIP stream has no CRC-32 trailer",
-            )
-            .at_offset(declared_size),
+    } else if trailer_len != 0 {
+        let message = format!(
+            "shared-Huffman CRC-32 trailer is truncated: expected 4 bytes, found {trailer_len}"
         );
+        if mode == DecodeMode::Strict {
+            return Err(Error::new(ErrorKind::TruncatedData, message).at_offset(declared_size));
+        }
+        warnings.push(Warning::new(WarningKind::MissingChecksum, message).at_offset(declared_size));
     }
-    if stream.len() > trailer_end {
+    if trailer_len > 4 {
         let message = format!(
             "ignored {} bytes after the shared-Huffman CRC-32",
             stream.len() - trailer_end
