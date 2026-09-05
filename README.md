@@ -37,6 +37,7 @@ ezipr verify image.bin
 ezipr decode image.bin image.png
 ezipr decode animation.bin --frames frames
 ezipr encode image.png image.bin --depth rgb565
+ezipr encode image.png image.bin --depth rgb565 --dither none
 ezipr encode animation.apng animation.bin --depth rgb888
 ezipr encode animation.gif animation.bin
 ```
@@ -50,6 +51,7 @@ height = 240
 repeat = 0
 depth = "rgb565"
 alpha = "auto"
+dither = "ordered"
 block_rows = 32
 filters = true
 compression = 6
@@ -75,18 +77,20 @@ A repeat value of zero means infinite playback. Disposal values are `none`,
 ## RGB565 conversion and dithering
 
 RGB565 stores only five red bits, six green bits, and five blue bits. EZIPr
-currently converts eight-bit input by discarding the low channel bits. It does
-not apply dithering.
+uses deterministic, component-specific 8x8 ordered dithering by default when
+reducing eight-bit input to RGB565 or ARGB565. Animation frames use their
+absolute canvas coordinates so that the pattern does not shift at frame
+rectangle boundaries. Alpha bytes are never dithered.
 
-The reference encoder dithers colors while reducing true-color PNG input to
-RGB565. Consequently, EZIPr and reference-encoded resources made from the same
-image can decode to slightly different RGB values even when both files are
-valid. Smooth gradients may show more banding with EZIPr's direct conversion;
-the dithered result replaces some of that banding with fine pixel-level noise.
-The undithered pixels can also compress substantially better because they tend
-to contain longer repeated patterns.
+The default follows the reference encoder's RGB565 conversion. Callers can
+select `Rgb565Dithering::None`, `--dither none`, or `dither = "none"` in a
+frame manifest to discard the low channel bits directly instead. Direct
+conversion can make banding more visible in smooth gradients. Ordered
+dithering replaces some of that banding with fine pixel-level noise and can
+increase the compressed size substantially because it breaks up repeated
+colors.
 
-This difference is limited to reduced-precision color encoding and is not
-evidence of a decoding error. RGB888 does not require this quantization and can
-preserve the source RGB bytes exactly. Optional deterministic RGB565 dithering
-is tracked in [TODO.md](TODO.md).
+RGB565 resources made with different dithering settings can therefore decode
+to slightly different colors even when both files are valid. RGB888 does not
+require this quantization, and the dithering option has no effect on RGB888 or
+ARGB888 output.

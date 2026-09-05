@@ -389,7 +389,13 @@ impl AnimationEncoder {
                 stride,
                 &frame.pixels,
             )?;
-            let stored = crate::encoder::encode_storage_pixels(image, storage)?;
+            let stored = crate::encoder::encode_storage_pixels(
+                image,
+                storage,
+                self.options.rgb565_dithering(),
+                frame.x_offset,
+                frame.y_offset,
+            )?;
             let filtered = if self.options.uses_row_filters() {
                 crate::encoder::filter_rows(
                     &stored,

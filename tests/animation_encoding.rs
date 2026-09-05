@@ -1,6 +1,7 @@
 use ezipr::{
     AlphaMode, AnimationEncoder, BlendMode, ColorDepth, Decoder, DisposalMethod, EncodeOptions,
-    FrameView, ImageView, PixelFormat, Repeat, ResourceFormat, ResourceKind, StorageFormat,
+    FrameView, ImageView, PixelFormat, Repeat, ResourceFormat, ResourceKind, Rgb565Dithering,
+    StorageFormat,
 };
 
 fn solid_rgba(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
@@ -36,7 +37,9 @@ fn add_frame(
 }
 
 fn encoded_animation() -> ezipr::EncodedResource {
-    let options = EncodeOptions::new(ColorDepth::Rgb565).alpha_mode(AlphaMode::Auto);
+    let options = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Auto)
+        .dithering(Rgb565Dithering::None);
     let mut encoder = AnimationEncoder::new(3, 3, Repeat::Finite(2), options).unwrap();
     add_frame(
         &mut encoder,
@@ -83,6 +86,28 @@ fn encoded_animation() -> ezipr::EncodedResource {
         BlendMode::Source,
     );
     encoder.finish().unwrap()
+}
+
+#[test]
+fn ordered_dithering_uses_animation_canvas_coordinates() {
+    let options = EncodeOptions::new(ColorDepth::Rgb565).alpha_mode(AlphaMode::Preserve);
+    let mut encoder = AnimationEncoder::new(8, 8, Repeat::Finite(1), options).unwrap();
+    add_frame(
+        &mut encoder,
+        1,
+        1,
+        &[0, 0, 0, 37],
+        3,
+        1,
+        (1, 10),
+        DisposalMethod::None,
+        BlendMode::Source,
+    );
+
+    let encoded = encoder.finish().unwrap();
+    let decoder = Decoder::new(encoded.as_bytes()).unwrap();
+    let frame = decoder.decode_frame(0, PixelFormat::Rgba8).unwrap();
+    assert_eq!(frame.pixels(), &[0, 4, 8, 37]);
 }
 
 #[test]

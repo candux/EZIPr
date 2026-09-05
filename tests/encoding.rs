@@ -1,6 +1,6 @@
 use ezipr::{
     AlphaMode, ColorDepth, DecodeMode, DecodeOptions, Decoder, EncodeOptions, Encoder, ImageView,
-    PixelFormat, ResourceEncoding, StorageFormat, StreamHeader,
+    PixelFormat, ResourceEncoding, Rgb565Dithering, StorageFormat, StreamHeader,
 };
 
 const RGBA: &[u8] = &[
@@ -135,6 +135,83 @@ fn encoded_checksum_is_enforced_independently() {
 
 #[test]
 fn validates_encoder_options() {
+    assert_eq!(
+        EncodeOptions::default().rgb565_dithering(),
+        Rgb565Dithering::Ordered8x8
+    );
     assert!(EncodeOptions::default().block_rows(0).is_err());
     assert!(EncodeOptions::default().compression_level(11).is_err());
+}
+
+#[test]
+fn ordered_dithering_uses_independent_component_thresholds() {
+    let pixels = [0; 8 * 8 * 3];
+    let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, &pixels).unwrap();
+    let options = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Discard)
+        .resource_encoding(ResourceEncoding::Pixel);
+    let encoded = Encoder::new(options).encode(image).unwrap();
+    let decoded = Decoder::new(encoded.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+
+    let pixel = |x: usize, y: usize| &decoded.pixels()[(y * 8 + x) * 3..][..3];
+    assert_eq!(pixel(0, 0), [0, 0, 0]);
+    assert_eq!(pixel(2, 0), [0, 0, 8]);
+    assert_eq!(pixel(5, 0), [8, 0, 0]);
+    assert_eq!(pixel(3, 1), [0, 4, 8]);
+    assert_eq!(pixel(4, 1), [8, 0, 0]);
+    assert_eq!(pixel(0, 7), [0, 0, 0]);
+}
+
+#[test]
+fn dithering_can_be_disabled_and_does_not_affect_rgb888() {
+    let pixels = [0; 8 * 8 * 3];
+    let image = ImageView::new(8, 8, PixelFormat::Rgb8, 8 * 3, &pixels).unwrap();
+    let base = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Discard)
+        .resource_encoding(ResourceEncoding::Pixel);
+    let direct = Encoder::new(base.dithering(Rgb565Dithering::None))
+        .encode(image)
+        .unwrap();
+    let decoded = Decoder::new(direct.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    assert!(decoded.pixels().iter().all(|&channel| channel == 0));
+
+    let rgb888 = EncodeOptions::new(ColorDepth::Rgb888)
+        .alpha_mode(AlphaMode::Discard)
+        .resource_encoding(ResourceEncoding::Pixel);
+    let direct = Encoder::new(rgb888.dithering(Rgb565Dithering::None))
+        .encode(image)
+        .unwrap();
+    let ordered = Encoder::new(rgb888.dithering(Rgb565Dithering::Ordered8x8))
+        .encode(image)
+        .unwrap();
+    assert_eq!(direct, ordered);
+}
+
+#[test]
+fn argb565_dithering_preserves_alpha_bytes() {
+    let pixels: Vec<_> = (0..64).flat_map(|alpha| [0, 0, 0, alpha]).collect();
+    let image = ImageView::new(8, 8, PixelFormat::Rgba8, 8 * 4, &pixels).unwrap();
+    let options = EncodeOptions::new(ColorDepth::Rgb565)
+        .alpha_mode(AlphaMode::Preserve)
+        .resource_encoding(ResourceEncoding::Pixel);
+    let encoded = Encoder::new(options).encode(image).unwrap();
+    let decoded = Decoder::new(encoded.as_bytes())
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgba8)
+        .unwrap();
+
+    assert_eq!(
+        decoded
+            .pixels()
+            .chunks_exact(4)
+            .map(|pixel| pixel[3])
+            .collect::<Vec<_>>(),
+        (0..64).collect::<Vec<_>>()
+    );
 }

@@ -98,6 +98,56 @@ fn static_png_decode_encode_round_trip_uses_requested_layout() {
 }
 
 #[test]
+fn rgb565_cli_defaults_to_ordered_dithering_and_can_disable_it() {
+    let directory = TestDirectory::new();
+    let png = directory.join("black.png");
+    let ordered_resource = directory.join("ordered.bin");
+    let direct_resource = directory.join("direct.bin");
+    let file = fs::File::create(&png).expect("create PNG");
+    let mut encoder = png::Encoder::new(file, 8, 8);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .expect("write PNG header")
+        .write_image_data(&[0; 8 * 8 * 3])
+        .expect("write PNG pixels");
+
+    assert_success(ezipr(&[
+        "encode",
+        path_text(&png),
+        path_text(&ordered_resource),
+        "--depth",
+        "rgb565",
+        "--pixel",
+    ]));
+    assert_success(ezipr(&[
+        "encode",
+        path_text(&png),
+        path_text(&direct_resource),
+        "--depth",
+        "rgb565",
+        "--pixel",
+        "--dither",
+        "none",
+    ]));
+
+    let ordered = fs::read(ordered_resource).expect("read ordered resource");
+    let ordered = Decoder::new(&ordered)
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    assert!(ordered.pixels().iter().any(|&channel| channel != 0));
+
+    let direct = fs::read(direct_resource).expect("read direct resource");
+    let direct = Decoder::new(&direct)
+        .unwrap()
+        .decode_frame(0, PixelFormat::Rgb8)
+        .unwrap();
+    assert!(direct.pixels().iter().all(|&channel| channel == 0));
+}
+
+#[test]
 fn animation_apng_round_trip_preserves_control_metadata() {
     let directory = TestDirectory::new();
     let apng = directory.join("decoded.apng");
@@ -143,6 +193,7 @@ height = 4
 repeat = 0
 depth = "rgb888"
 alpha = "preserve"
+dither = "none"
 
 [[frames]]
 file = {:?}

@@ -33,12 +33,24 @@ pub enum ResourceEncoding {
     Pixel,
 }
 
+/// Color dithering applied while reducing eight-bit RGB channels to RGB565.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Rgb565Dithering {
+    /// Discard the low channel bits without modifying the input colors.
+    None,
+    /// Apply a deterministic, component-specific 8x8 ordered dither.
+    #[default]
+    Ordered8x8,
+}
+
 /// Options controlling static resource encoding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EncodeOptions {
     color_depth: ColorDepth,
     alpha_mode: AlphaMode,
     resource_encoding: ResourceEncoding,
+    rgb565_dithering: Rgb565Dithering,
     block_rows: u8,
     row_filters: bool,
     compression_level: u8,
@@ -50,6 +62,7 @@ impl Default for EncodeOptions {
             color_depth: ColorDepth::Rgb565,
             alpha_mode: AlphaMode::Auto,
             resource_encoding: ResourceEncoding::Ezip,
+            rgb565_dithering: Rgb565Dithering::Ordered8x8,
             block_rows: 32,
             row_filters: true,
             compression_level: 6,
@@ -72,6 +85,11 @@ impl EncodeOptions {
 
     pub fn resource_encoding(mut self, resource_encoding: ResourceEncoding) -> Self {
         self.resource_encoding = resource_encoding;
+        self
+    }
+
+    pub fn dithering(mut self, dithering: Rgb565Dithering) -> Self {
+        self.rgb565_dithering = dithering;
         self
     }
 
@@ -112,6 +130,10 @@ impl EncodeOptions {
 
     pub const fn encoding(self) -> ResourceEncoding {
         self.resource_encoding
+    }
+
+    pub const fn rgb565_dithering(self) -> Rgb565Dithering {
+        self.rgb565_dithering
     }
 
     pub const fn rows_per_block(self) -> u8 {
@@ -204,7 +226,8 @@ impl Encoder {
         let resource_format =
             resolve_resource_format(self.options.resource_encoding, storage_format);
         let header = ResourceHeader::new(resource_format, width, height)?;
-        let stored_pixels = encode_storage_pixels(image, storage_format)?;
+        let stored_pixels =
+            encode_storage_pixels(image, storage_format, self.options.rgb565_dithering, 0, 0)?;
         let mut bytes = header.to_bytes().to_vec();
         match self.options.resource_encoding {
             ResourceEncoding::Pixel => {
@@ -297,6 +320,9 @@ pub(crate) const fn resolve_resource_format(
 pub(crate) fn encode_storage_pixels(
     image: ImageView<'_>,
     storage: StorageFormat,
+    dithering: Rgb565Dithering,
+    x_offset: u32,
+    y_offset: u32,
 ) -> Result<Vec<u8>> {
     let pixel_count = (image.width() as usize)
         .checked_mul(image.height() as usize)
@@ -309,16 +335,19 @@ pub(crate) fn encode_storage_pixels(
     for row in 0..image.height() as usize {
         let row_start = row * image.stride();
         let row_end = row_start + image.width() as usize * input_bpp;
-        for pixel in image.pixels()[row_start..row_end].chunks_exact(input_bpp) {
+        for (column, pixel) in image.pixels()[row_start..row_end]
+            .chunks_exact(input_bpp)
+            .enumerate()
+        {
             let red = pixel[0];
             let green = pixel[1];
             let blue = pixel[2];
             let alpha = if input_bpp == 4 { pixel[3] } else { 255 };
             match storage {
                 StorageFormat::Rgb565 | StorageFormat::Argb565 => {
-                    let packed = (u16::from(red >> 3) << 11)
-                        | (u16::from(green >> 2) << 5)
-                        | u16::from(blue >> 3);
+                    let x = ((x_offset & 7) as usize + column) & 7;
+                    let y = ((y_offset & 7) as usize + row) & 7;
+                    let packed = pack_rgb565(red, green, blue, dithering, y * 8 + x);
                     output.extend_from_slice(&packed.to_le_bytes());
                     if storage == StorageFormat::Argb565 {
                         output.push(alpha);
@@ -330,6 +359,39 @@ pub(crate) fn encode_storage_pixels(
         }
     }
     Ok(output)
+}
+
+const DITHER_RED: [u8; 64] = [
+    1, 7, 3, 5, 0, 8, 2, 6, 7, 1, 5, 3, 8, 0, 6, 2, 3, 5, 0, 8, 2, 6, 1, 7, 5, 3, 8, 0, 6, 2, 7, 1,
+    0, 8, 2, 6, 1, 7, 3, 5, 8, 0, 6, 2, 7, 1, 5, 3, 2, 6, 1, 7, 3, 5, 0, 8, 6, 2, 7, 1, 5, 3, 8, 0,
+];
+
+const DITHER_GREEN: [u8; 64] = [
+    1, 3, 2, 2, 3, 1, 2, 2, 2, 2, 0, 4, 2, 2, 4, 0, 3, 1, 2, 2, 1, 3, 2, 2, 2, 2, 4, 0, 2, 2, 0, 4,
+    1, 3, 2, 2, 3, 1, 2, 2, 2, 2, 0, 4, 2, 2, 4, 0, 3, 1, 2, 2, 1, 3, 2, 2, 2, 2, 4, 0, 2, 2, 0, 4,
+];
+
+const DITHER_BLUE: [u8; 64] = [
+    5, 3, 8, 0, 6, 2, 7, 1, 3, 5, 0, 8, 2, 6, 1, 7, 8, 0, 6, 2, 7, 1, 5, 3, 0, 8, 2, 6, 1, 7, 3, 5,
+    6, 2, 7, 1, 5, 3, 8, 0, 2, 6, 1, 7, 3, 5, 0, 8, 7, 1, 5, 3, 8, 0, 6, 2, 1, 7, 3, 5, 0, 8, 2, 6,
+];
+
+fn pack_rgb565(
+    red: u8,
+    green: u8,
+    blue: u8,
+    dithering: Rgb565Dithering,
+    dither_index: usize,
+) -> u16 {
+    let (red, green, blue) = match dithering {
+        Rgb565Dithering::None => (red, green, blue),
+        Rgb565Dithering::Ordered8x8 => (
+            red.saturating_add(DITHER_RED[dither_index]),
+            green.saturating_add(DITHER_GREEN[dither_index]),
+            blue.saturating_add(DITHER_BLUE[dither_index]),
+        ),
+    };
+    (u16::from(red >> 3) << 11) | (u16::from(green >> 2) << 5) | u16::from(blue >> 3)
 }
 
 pub(crate) const fn color_type(storage: StorageFormat) -> u8 {

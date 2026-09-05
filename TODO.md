@@ -24,10 +24,3 @@
   animation frames.
 - Add regression tests proving that optimized output decodes to the same pixels,
   is deterministic, and is no larger than the baseline candidate.
-
-## Optional RGB565 dithering
-
-- Add an explicit, deterministic dithering option for RGB565 and ARGB565
-  encoding while retaining direct quantization as the default.
-- Test gradients and flat-color images for visual quality and compressed-size
-  tradeoffs. Alpha bytes must remain unchanged.

@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ezipr::{
     AlphaMode, AnimationEncoder, BlendMode, ColorDepth, DecodeMode, DecodeOptions, Decoder,
     DisposalMethod, EncodeOptions, Encoder, FrameView, ImageView, PixelFormat, Repeat,
-    ResourceEncoding, ResourceKind,
+    ResourceEncoding, ResourceKind, Rgb565Dithering,
 };
 use serde::Deserialize;
 
@@ -65,6 +65,12 @@ enum AlphaArg {
     Discard,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DitherArg {
+    None,
+    Ordered,
+}
+
 #[derive(Debug, Args)]
 struct EncodeArgs {
     input: PathBuf,
@@ -75,6 +81,9 @@ struct EncodeArgs {
     /// Alpha-channel policy. A manifest value is used when omitted.
     #[arg(long, value_enum)]
     alpha: Option<AlphaArg>,
+    /// RGB565 dithering. A manifest value is used when omitted.
+    #[arg(long, value_enum)]
+    dither: Option<DitherArg>,
     /// Write an uncompressed PIXEL resource. Static images only.
     #[arg(long)]
     pixel: bool,
@@ -106,6 +115,13 @@ enum ManifestAlpha {
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
+enum ManifestDither {
+    None,
+    Ordered,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum ManifestDisposal {
     None,
     Background,
@@ -128,6 +144,7 @@ struct AnimationManifest {
     repeat: u32,
     depth: Option<ManifestDepth>,
     alpha: Option<ManifestAlpha>,
+    dither: Option<ManifestDither>,
     block_rows: Option<u8>,
     filters: Option<bool>,
     compression: Option<u8>,
@@ -381,6 +398,7 @@ fn encode_manifest(args: &EncodeArgs) -> CliResult<ezipr::EncodedResource> {
     let manifest_options = ManifestOptions {
         depth: manifest.depth,
         alpha: manifest.alpha,
+        dither: manifest.dither,
         block_rows: manifest.block_rows,
         filters: manifest.filters,
         compression: manifest.compression,
@@ -392,6 +410,7 @@ fn encode_manifest(args: &EncodeArgs) -> CliResult<ezipr::EncodedResource> {
 struct ManifestOptions {
     depth: Option<ManifestDepth>,
     alpha: Option<ManifestAlpha>,
+    dither: Option<ManifestDither>,
     block_rows: Option<u8>,
     filters: Option<bool>,
     compression: Option<u8>,
@@ -435,6 +454,11 @@ fn build_options(args: &EncodeArgs, manifest: Option<ManifestOptions>) -> CliRes
         .map(alpha_from_arg)
         .or_else(|| manifest.and_then(|value| value.alpha.map(alpha_from_manifest)))
         .unwrap_or(AlphaMode::Auto);
+    let dithering = args
+        .dither
+        .map(dither_from_arg)
+        .or_else(|| manifest.and_then(|value| value.dither.map(dither_from_manifest)))
+        .unwrap_or(Rgb565Dithering::Ordered8x8);
     let block_rows = args
         .block_rows
         .or_else(|| manifest.and_then(|value| value.block_rows))
@@ -455,6 +479,7 @@ fn build_options(args: &EncodeArgs, manifest: Option<ManifestOptions>) -> CliRes
     };
     let options = EncodeOptions::new(depth)
         .alpha_mode(alpha)
+        .dithering(dithering)
         .resource_encoding(encoding)
         .row_filters(filters)
         .block_rows(block_rows)?
@@ -729,6 +754,13 @@ fn alpha_from_arg(value: AlphaArg) -> AlphaMode {
     }
 }
 
+fn dither_from_arg(value: DitherArg) -> Rgb565Dithering {
+    match value {
+        DitherArg::None => Rgb565Dithering::None,
+        DitherArg::Ordered => Rgb565Dithering::Ordered8x8,
+    }
+}
+
 fn depth_from_manifest(value: ManifestDepth) -> ColorDepth {
     match value {
         ManifestDepth::Rgb565 => ColorDepth::Rgb565,
@@ -741,6 +773,13 @@ fn alpha_from_manifest(value: ManifestAlpha) -> AlphaMode {
         ManifestAlpha::Auto => AlphaMode::Auto,
         ManifestAlpha::Preserve => AlphaMode::Preserve,
         ManifestAlpha::Discard => AlphaMode::Discard,
+    }
+}
+
+fn dither_from_manifest(value: ManifestDither) -> Rgb565Dithering {
+    match value {
+        ManifestDither::None => Rgb565Dithering::None,
+        ManifestDither::Ordered => Rgb565Dithering::Ordered8x8,
     }
 }
 
