@@ -56,7 +56,6 @@ ezipr verify image.bin
 ezipr decode image.bin image.png
 ezipr decode animation.bin --frames frames
 ezipr encode image.png image.bin --depth rgb565
-ezipr encode image.png image.bin --history-limit 8192
 ezipr encode image.png image.bin --depth rgb565 --dither none
 ezipr encode image.png image.bin --depth rgb565 --dither reference
 ezipr encode image.png image.bin --smallest
@@ -98,11 +97,13 @@ A repeat value of zero means infinite playback. Disposal values are `none`,
 
 ## Hardware history limit
 
-Use `--history-limit 8192` (`EncodeOptions::history_limit(8192)`) for SF32LB525.
-On-board row comparisons found corruption exactly at the first DEFLATE match
-beyond 8 KiB; the default 32 KiB stream still passes software decoding. This
-option uses a bounded sliding window, trading some file size for compatibility. It cannot be combined with `--smallest`, whose Zopfli
-pass does not enforce the limit. The default output remains unchanged.
+Encoding uses an 8 KiB DEFLATE history limit by default, including animations
+and `--smallest`. This avoids references beyond the history available to the
+hardware decoder.
+
+`--history-limit` (`EncodeOptions::history_limit`) overrides the limit. Larger
+windows should only be used with targets verified to support them; successful
+software decoding does not establish hardware compatibility.
 
 ## RGB565 conversion and dithering
 
@@ -136,8 +137,8 @@ ARGB888 output.
 
 Use `ezipr encode input.png output.bin --smallest` to search for a smaller eZIP
 resource. It compares adaptive filtering, each fixed PNG row filter, and
-filterless storage at every miniz compression level, then tries Zopfli on the
-best filtered representation. The smallest result is deterministic and never
+filterless storage across the bounded compressor's levels. Every candidate
+respects the selected history limit. The smallest result is deterministic and never
 larger than the equivalent normal encode.
 
 For animations, each frame is optimized and the selected filter mode is used
@@ -145,13 +146,10 @@ consistently across the resource. `--no-filters` restricts the search to
 filterless data. PIXEL resources are uncompressed and do not support
 `--smallest`.
 
-A typical 1.6-megapixel RGB565 image takes about 0.3 seconds with normal
-encoding and 40 seconds with `--smallest`. The resulting resource is typically
-15% to 18% smaller, with no change to decoding speed or compatibility.
-
 Library users enable `CompressionStrategy::Smallest` with the `smallest` Cargo
-feature. The `cli` feature includes it automatically; normal encoding and
-decoding do not require Zopfli.
+feature. The `cli` feature includes it automatically. Only an explicit 32 KiB
+history override uses the unrestricted miniz/Zopfli search; Zopfli is never
+used with a smaller history limit.
 
 ## License
 

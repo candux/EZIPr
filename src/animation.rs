@@ -354,7 +354,7 @@ impl AnimationEncoder {
                 .iter()
                 .zip(&stored_frames)
                 .map(|(frame, stored)| {
-                    crate::encoder::compress_animation_pixels_miniz(
+                    crate::encoder::compress_animation_pixels_search(
                         stored,
                         frame.width as usize,
                         frame.height as usize,
@@ -378,11 +378,11 @@ impl AnimationEncoder {
         if self.options.strategy() == crate::CompressionStrategy::Smallest {
             compressed_frames = compressed_frames
                 .into_iter()
-                .map(crate::encoder::optimize_with_zopfli)
+                .map(|result| crate::encoder::optimize_with_zopfli(result, self.options))
                 .collect::<Result<Vec<_>>>()?;
         }
-        // The miniz comparison replaces the entire vector at once, and the
-        // Zopfli pass cannot alter filtering, so every frame has this mode.
+        // The filter comparison replaces the entire vector at once, and the
+        // optional Zopfli pass cannot alter filtering, so every frame has this mode.
         let has_row_filters = compressed_frames[0].has_row_filters;
 
         let table_len = self

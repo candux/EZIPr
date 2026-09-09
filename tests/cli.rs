@@ -56,6 +56,28 @@ fn path_text(path: &Path) -> &str {
 }
 
 #[test]
+fn default_history_matches_explicit_8k_in_both_modes() {
+    let directory = TestDirectory::new();
+    for smallest in [false, true] {
+        let implicit = directory.join("implicit.bin");
+        let explicit = directory.join("explicit.bin");
+        let mut args = vec![
+            "encode",
+            "tests/fixtures/static/source-multiblock.png",
+            path_text(&implicit),
+        ];
+        if smallest {
+            args.push("--smallest");
+        }
+        assert_success(ezipr(&args));
+        args[2] = path_text(&explicit);
+        args.extend(["--history-limit", "8192"]);
+        assert_success(ezipr(&args));
+        assert_eq!(fs::read(implicit).unwrap(), fs::read(explicit).unwrap());
+    }
+}
+
+#[test]
 fn gif_repeat_counts_convert_to_total_plays() {
     let directory = TestDirectory::new();
     for (index, (repeat, expected)) in [

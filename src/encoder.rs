@@ -84,7 +84,7 @@ impl Default for EncodeOptions {
             block_rows: 32,
             row_filters: true,
             compression_level: 6,
-            history_limit: 32768,
+            history_limit: 8192,
             compression_strategy: CompressionStrategy::Fast,
         }
     }
@@ -129,8 +129,8 @@ impl EncodeOptions {
         self
     }
 
-    /// Bound the DEFLATE sliding window. The SF32LB52
-    /// EZIP hardware needs at most 8192 bytes; the default retains 32 KiB.
+    /// Bound the DEFLATE sliding window. Defaults to 8 KiB for hardware
+    /// compatibility. Larger windows require a target verified to support them.
     pub fn history_limit(mut self, bytes: u16) -> Result<Self> {
         if !(512..=32768).contains(&bytes) || !bytes.is_power_of_two() {
             return Err(Error::new(
@@ -142,6 +142,8 @@ impl EncodeOptions {
         Ok(self)
     }
 
+    /// Select compression effort from 0 through 10. Bounded histories use
+    /// levels 0 through 9; level 10 is equivalent to 9 for those streams.
     pub fn compression_level(mut self, level: u8) -> Result<Self> {
         if level > 10 {
             return Err(Error::new(
@@ -332,15 +334,15 @@ pub(crate) fn compress_pixels(
     bytes_per_pixel: usize,
     options: EncodeOptions,
 ) -> Result<CompressionResult> {
-    let result = compress_pixels_miniz(pixels, width, height, bytes_per_pixel, options, true);
+    let result = compress_pixels_search(pixels, width, height, bytes_per_pixel, options, true);
     if options.strategy() == CompressionStrategy::Smallest {
-        optimize_with_zopfli(result)
+        optimize_with_zopfli(result, options)
     } else {
         Ok(result)
     }
 }
 
-pub(crate) fn compress_animation_pixels_miniz(
+pub(crate) fn compress_animation_pixels_search(
     pixels: &[u8],
     width: usize,
     height: usize,
@@ -349,7 +351,7 @@ pub(crate) fn compress_animation_pixels_miniz(
 ) -> CompressionResult {
     // eZIP-A has one filter-mode flag for every frame, so a frame must not
     // independently switch the whole animation to filterless storage.
-    compress_pixels_miniz(pixels, width, height, bytes_per_pixel, options, false)
+    compress_pixels_search(pixels, width, height, bytes_per_pixel, options, false)
 }
 
 fn compress_bounded(input: &[u8], level: u8, history: u16) -> Vec<u8> {
@@ -378,7 +380,7 @@ fn compress_bounded(input: &[u8], level: u8, history: u16) -> Vec<u8> {
     }
 }
 
-fn compress_pixels_miniz(
+fn compress_pixels_search(
     pixels: &[u8],
     width: usize,
     height: usize,
@@ -410,11 +412,17 @@ fn compress_pixels_miniz(
     }
 
     let mut best = CompressionResult {
-        compressed: miniz_oxide::deflate::compress_to_vec(&baseline.1, options.level()),
+        compressed: compress_bounded(&baseline.1, options.level(), options.history_limit),
         filtered: baseline.1.clone(),
         has_row_filters: baseline.0,
     };
-    search_candidate(&mut best, baseline.0, baseline.1, Some(options.level()));
+    search_candidate(
+        &mut best,
+        baseline.0,
+        baseline.1,
+        Some(options.level()),
+        options.history_limit,
+    );
     if options.uses_row_filters() {
         for filter in 0..=4 {
             search_candidate(
@@ -429,23 +437,24 @@ fn compress_pixels_miniz(
                     filter,
                 ),
                 None,
+                options.history_limit,
             );
         }
         if allow_filterless_candidate {
-            search_candidate(&mut best, false, pixels.to_vec(), None);
+            search_candidate(
+                &mut best,
+                false,
+                pixels.to_vec(),
+                None,
+                options.history_limit,
+            );
         }
     }
     best
 }
 
 #[cfg(feature = "smallest")]
-pub(crate) fn validate_compression_strategy(options: EncodeOptions) -> Result<()> {
-    if options.history_limit < 32768 && options.strategy() == CompressionStrategy::Smallest {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            "bounded history cannot be combined with smallest-output compression",
-        ));
-    }
+pub(crate) fn validate_compression_strategy(_options: EncodeOptions) -> Result<()> {
     Ok(())
 }
 
@@ -461,8 +470,17 @@ pub(crate) fn validate_compression_strategy(options: EncodeOptions) -> Result<()
 }
 
 #[cfg(feature = "smallest")]
-pub(crate) fn optimize_with_zopfli(mut best: CompressionResult) -> Result<CompressionResult> {
+pub(crate) fn optimize_with_zopfli(
+    mut best: CompressionResult,
+    encoding: EncodeOptions,
+) -> Result<CompressionResult> {
     use std::num::NonZeroU64;
+
+    // Zopfli has no configurable history limit. Never offer its output as a
+    // candidate for a bounded stream, even if it happens to compress better.
+    if encoding.history_limit < 32768 {
+        return Ok(best);
+    }
 
     // Zopfli recommends fewer iterations for large inputs. A finite stale-pass
     // limit avoids spending time after the search has stopped improving.
@@ -496,7 +514,10 @@ pub(crate) fn optimize_with_zopfli(mut best: CompressionResult) -> Result<Compre
 }
 
 #[cfg(not(feature = "smallest"))]
-pub(crate) fn optimize_with_zopfli(_best: CompressionResult) -> Result<CompressionResult> {
+pub(crate) fn optimize_with_zopfli(
+    _best: CompressionResult,
+    _encoding: EncodeOptions,
+) -> Result<CompressionResult> {
     Err(Error::new(
         ErrorKind::InvalidInput,
         "smallest-output compression requires the `smallest` Cargo feature",
@@ -508,6 +529,7 @@ fn search_candidate(
     has_row_filters: bool,
     filtered: Vec<u8>,
     seed_level: Option<u8>,
+    history: u16,
 ) {
     // Retain only the winner and current candidate. Identical winning data has
     // already been searched, except on the initial baseline pass.
@@ -516,11 +538,11 @@ fn search_candidate(
         return;
     }
     let mut improved = false;
-    for level in 0..=10 {
+    for level in 0..=if history < 32768 { 9 } else { 10 } {
         if seed_level == Some(level) {
             continue;
         }
-        let compressed = miniz_oxide::deflate::compress_to_vec(&filtered, level);
+        let compressed = compress_bounded(&filtered, level, history);
         if compressed.len() < best.compressed.len() {
             best.compressed = compressed;
             improved = true;
@@ -896,13 +918,93 @@ mod history_tests {
     }
 
     #[test]
-    fn validates_history_and_rejects_unbounded_optimizer() {
+    fn validates_history_and_smallest_feature() {
+        assert_eq!(EncodeOptions::default().history_limit, 8192);
         assert!(EncodeOptions::default().history_limit(0).is_err());
         assert!(EncodeOptions::default().history_limit(32769).is_err());
         let options = EncodeOptions::default()
             .history_limit(8192)
             .unwrap()
             .compression_strategy(CompressionStrategy::Smallest);
-        assert!(validate_compression_strategy(options).is_err());
+        assert_eq!(
+            validate_compression_strategy(options).is_ok(),
+            cfg!(feature = "smallest")
+        );
+    }
+
+    #[test]
+    fn default_static_and_animation_encoders_keep_history_bounded() {
+        let mut seed = 7u32;
+        let pattern: Vec<u8> = (0..10000)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as u8
+            })
+            .collect();
+        let pixels = pattern.repeat(6);
+        let image = ImageView::new(250, 80, PixelFormat::Rgb8, 750, &pixels).unwrap();
+        let strategies = [CompressionStrategy::Fast, CompressionStrategy::Smallest];
+        for strategy in strategies {
+            if strategy == CompressionStrategy::Smallest && !cfg!(feature = "smallest") {
+                continue;
+            }
+            for filters in [false, true] {
+                for level in [0, 6, 10] {
+                    let options = EncodeOptions::new(ColorDepth::Rgb888)
+                        .row_filters(filters)
+                        .compression_level(level)
+                        .unwrap()
+                        .compression_strategy(strategy);
+                    let encoded = Encoder::new(options).encode(image).unwrap();
+                    let bytes = encoded.as_bytes();
+                    let raw = &bytes[20..bytes.len() - 4];
+                    assert_eq!(
+                        decode_with_8k_history(raw).unwrap(),
+                        miniz_oxide::inflate::decompress_to_vec(raw).unwrap()
+                    );
+                    assert_eq!(
+                        crate::Decoder::new(bytes)
+                            .unwrap()
+                            .decode_frame(0, PixelFormat::Rgb8)
+                            .unwrap()
+                            .pixels(),
+                        pixels
+                    );
+                    let fast =
+                        Encoder::new(options.compression_strategy(CompressionStrategy::Fast))
+                            .encode(image)
+                            .unwrap();
+                    assert!(bytes.len() <= fast.as_bytes().len());
+                }
+                let options = EncodeOptions::new(ColorDepth::Rgb888)
+                    .row_filters(filters)
+                    .compression_strategy(strategy);
+                let mut animation =
+                    crate::AnimationEncoder::new(250, 80, crate::Repeat::Infinite, options)
+                        .unwrap();
+                for _ in 0..2 {
+                    animation
+                        .push_frame(crate::FrameView::new(image, 0, 0, 1, 10))
+                        .unwrap();
+                }
+                let animation = animation.finish().unwrap();
+                let bytes = animation.as_bytes();
+                for index in 0..2 {
+                    let start = u32::from_be_bytes(
+                        bytes[28 + index * 4..32 + index * 4].try_into().unwrap(),
+                    ) as usize
+                        + 4;
+                    let len = u32::from_be_bytes(bytes[start + 26..start + 30].try_into().unwrap())
+                        as usize;
+                    let raw = &bytes[start + 30..start + 30 + len];
+                    assert_eq!(
+                        decode_with_8k_history(raw).unwrap(),
+                        miniz_oxide::inflate::decompress_to_vec(raw).unwrap()
+                    );
+                }
+            }
+        }
     }
 }

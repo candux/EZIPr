@@ -97,8 +97,8 @@ struct EncodeArgs {
     /// DEFLATE compression level.
     #[arg(long, value_parser = clap::value_parser!(u8).range(0..=10))]
     compression: Option<u8>,
-    /// Maximum DEFLATE history in bytes (SF32LB52: 8192).
-    #[arg(long, value_parser = clap::value_parser!(u16).range(1..=32768), conflicts_with = "smallest")]
+    /// Maximum DEFLATE history in bytes (default: 8192).
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..=32768))]
     history_limit: Option<u16>,
     /// Spend substantially more time searching for the smallest output.
     #[arg(long, conflicts_with = "pixel")]
@@ -495,7 +495,7 @@ fn build_options(args: &EncodeArgs, manifest: Option<ManifestOptions>) -> CliRes
         .row_filters(filters)
         .block_rows(block_rows)?
         .compression_level(compression)?
-        .history_limit(args.history_limit.unwrap_or(32768))?
+        .history_limit(args.history_limit.unwrap_or(8192))?
         .compression_strategy(if args.smallest {
             CompressionStrategy::Smallest
         } else {
