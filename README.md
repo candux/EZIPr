@@ -56,6 +56,7 @@ ezipr verify image.bin
 ezipr decode image.bin image.png
 ezipr decode animation.bin --frames frames
 ezipr encode image.png image.bin --depth rgb565
+ezipr encode image.png image.bin --history-limit 8192
 ezipr encode image.png image.bin --depth rgb565 --dither none
 ezipr encode image.png image.bin --depth rgb565 --dither reference
 ezipr encode image.png image.bin --smallest
@@ -94,6 +95,14 @@ blend = "over"
 
 A repeat value of zero means infinite playback. Disposal values are `none`,
 `background`, and `previous`; blend values are `source` and `over`.
+
+## Hardware history limit
+
+Use `--history-limit 8192` (`EncodeOptions::history_limit(8192)`) for SF32LB525.
+On-board row comparisons found corruption exactly at the first DEFLATE match
+beyond 8 KiB; the default 32 KiB stream still passes software decoding. This
+option uses a bounded sliding window, trading some file size for compatibility. It cannot be combined with `--smallest`, whose Zopfli
+pass does not enforce the limit. The default output remains unchanged.
 
 ## RGB565 conversion and dithering
 

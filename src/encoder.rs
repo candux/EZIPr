@@ -70,6 +70,7 @@ pub struct EncodeOptions {
     block_rows: u8,
     row_filters: bool,
     compression_level: u8,
+    history_limit: u16,
     compression_strategy: CompressionStrategy,
 }
 
@@ -83,6 +84,7 @@ impl Default for EncodeOptions {
             block_rows: 32,
             row_filters: true,
             compression_level: 6,
+            history_limit: 32768,
             compression_strategy: CompressionStrategy::Fast,
         }
     }
@@ -125,6 +127,19 @@ impl EncodeOptions {
     pub fn row_filters(mut self, enabled: bool) -> Self {
         self.row_filters = enabled;
         self
+    }
+
+    /// Bound the DEFLATE sliding window. The SF32LB52
+    /// EZIP hardware needs at most 8192 bytes; the default retains 32 KiB.
+    pub fn history_limit(mut self, bytes: u16) -> Result<Self> {
+        if !(512..=32768).contains(&bytes) || !bytes.is_power_of_two() {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "history limit must be a power of two from 512 through 32768 bytes",
+            ));
+        }
+        self.history_limit = bytes;
+        Ok(self)
     }
 
     pub fn compression_level(mut self, level: u8) -> Result<Self> {
@@ -337,6 +352,32 @@ pub(crate) fn compress_animation_pixels_miniz(
     compress_pixels_miniz(pixels, width, height, bytes_per_pixel, options, false)
 }
 
+fn compress_bounded(input: &[u8], level: u8, history: u16) -> Vec<u8> {
+    if history == 32768 {
+        return miniz_oxide::deflate::compress_to_vec(input, level);
+    }
+    let mut compressor = flate2::Compress::new_with_window_bits(
+        flate2::Compression::new(u32::from(level.min(9))),
+        false,
+        history.ilog2() as u8,
+    );
+    let mut output = Vec::new();
+    loop {
+        output.reserve(16384);
+        let consumed = compressor.total_in() as usize;
+        let status = compressor
+            .compress_vec(
+                &input[consumed..],
+                &mut output,
+                flate2::FlushCompress::Finish,
+            )
+            .expect("in-memory compression failed");
+        if status == flate2::Status::StreamEnd {
+            return output;
+        }
+    }
+}
+
 fn compress_pixels_miniz(
     pixels: &[u8],
     width: usize,
@@ -360,7 +401,7 @@ fn compress_pixels_miniz(
         (false, pixels.to_vec())
     };
     if options.strategy() == CompressionStrategy::Fast {
-        let compressed = miniz_oxide::deflate::compress_to_vec(&baseline.1, options.level());
+        let compressed = compress_bounded(&baseline.1, options.level(), options.history_limit);
         return CompressionResult {
             filtered: baseline.1,
             compressed,
@@ -398,7 +439,13 @@ fn compress_pixels_miniz(
 }
 
 #[cfg(feature = "smallest")]
-pub(crate) fn validate_compression_strategy(_options: EncodeOptions) -> Result<()> {
+pub(crate) fn validate_compression_strategy(options: EncodeOptions) -> Result<()> {
+    if options.history_limit < 32768 && options.strategy() == CompressionStrategy::Smallest {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "bounded history cannot be combined with smallest-output compression",
+        ));
+    }
     Ok(())
 }
 
@@ -790,5 +837,72 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use miniz_oxide::inflate::{
+        TINFLStatus,
+        core::{DecompressorOxide, decompress},
+    };
+
+    fn decode_with_8k_history(input: &[u8]) -> std::result::Result<Vec<u8>, TINFLStatus> {
+        let mut decoder = DecompressorOxide::new();
+        let mut ring = [0u8; 8192];
+        let mut consumed = 0;
+        let mut output = Vec::new();
+        loop {
+            let (status, read, written) =
+                decompress(&mut decoder, &input[consumed..], &mut ring, 0, 0);
+            consumed += read;
+            output.extend_from_slice(&ring[..written]);
+            if status == TINFLStatus::Done {
+                return Ok(output);
+            }
+            if status != TINFLStatus::HasMoreOutput {
+                return Err(status);
+            }
+            assert_eq!(written, ring.len());
+        }
+    }
+
+    #[test]
+    fn bounded_stream_decodes_with_hardware_sized_history() {
+        let mut seed = 7u32;
+        let pattern: Vec<u8> = (0..10000)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as u8
+            })
+            .collect();
+        let input = pattern.repeat(4);
+        // This fixture actually exercises references beyond the chip's history.
+        assert_ne!(
+            decode_with_8k_history(&compress_bounded(&input, 6, 32768)),
+            Ok(input.clone())
+        );
+        assert_eq!(
+            decode_with_8k_history(&compress_bounded(&input, 6, 8192)).unwrap(),
+            input
+        );
+        assert_eq!(
+            decode_with_8k_history(&compress_bounded(&input, 6, 1024)).unwrap(),
+            input
+        );
+    }
+
+    #[test]
+    fn validates_history_and_rejects_unbounded_optimizer() {
+        assert!(EncodeOptions::default().history_limit(0).is_err());
+        assert!(EncodeOptions::default().history_limit(32769).is_err());
+        let options = EncodeOptions::default()
+            .history_limit(8192)
+            .unwrap()
+            .compression_strategy(CompressionStrategy::Smallest);
+        assert!(validate_compression_strategy(options).is_err());
     }
 }

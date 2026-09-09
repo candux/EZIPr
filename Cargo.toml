@@ -24,6 +24,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 crc32fast = "1"
 gif = { version = "0.14", optional = true }
 miniz_oxide = "0.9"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 png = { version = "0.18", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
