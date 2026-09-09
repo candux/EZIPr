@@ -147,9 +147,8 @@ filterless data. PIXEL resources are uncompressed and do not support
 `--smallest`.
 
 Library users enable `CompressionStrategy::Smallest` with the `smallest` Cargo
-feature. The `cli` feature includes it automatically. Only an explicit 32 KiB
-history override uses the unrestricted miniz/Zopfli search; Zopfli is never
-used with a smaller history limit.
+feature. The `cli` feature includes it automatically. The size search adds no
+compressor dependencies.
 
 ## License
 

@@ -375,14 +375,8 @@ impl AnimationEncoder {
                 compressed_frames = filterless_frames;
             }
         }
-        if self.options.strategy() == crate::CompressionStrategy::Smallest {
-            compressed_frames = compressed_frames
-                .into_iter()
-                .map(|result| crate::encoder::optimize_with_zopfli(result, self.options))
-                .collect::<Result<Vec<_>>>()?;
-        }
-        // The filter comparison replaces the entire vector at once, and the
-        // optional Zopfli pass cannot alter filtering, so every frame has this mode.
+        // The filter comparison replaces the entire vector at once, so every
+        // frame has the same filter mode.
         let has_row_filters = compressed_frames[0].has_row_filters;
 
         let table_len = self

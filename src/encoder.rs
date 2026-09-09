@@ -288,13 +288,14 @@ impl Encoder {
                 bytes.extend_from_slice(&crc32fast::hash(&stored_pixels).to_le_bytes());
             }
             ResourceEncoding::Ezip => {
-                let result = compress_pixels(
+                let result = compress_pixels_search(
                     &stored_pixels,
                     width as usize,
                     height as usize,
                     storage_format.bytes_per_pixel(),
                     self.options,
-                )?;
+                    true,
+                );
                 let stream_size = crate::StreamHeader::BYTE_LEN
                     .checked_add(result.compressed.len())
                     .and_then(|size| size.checked_add(crate::StreamHeader::CHECKSUM_LEN))
@@ -325,21 +326,6 @@ pub(crate) struct CompressionResult {
     pub filtered: Vec<u8>,
     pub compressed: Vec<u8>,
     pub has_row_filters: bool,
-}
-
-pub(crate) fn compress_pixels(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-    bytes_per_pixel: usize,
-    options: EncodeOptions,
-) -> Result<CompressionResult> {
-    let result = compress_pixels_search(pixels, width, height, bytes_per_pixel, options, true);
-    if options.strategy() == CompressionStrategy::Smallest {
-        optimize_with_zopfli(result, options)
-    } else {
-        Ok(result)
-    }
 }
 
 pub(crate) fn compress_animation_pixels_search(
@@ -467,61 +453,6 @@ pub(crate) fn validate_compression_strategy(options: EncodeOptions) -> Result<()
         ));
     }
     Ok(())
-}
-
-#[cfg(feature = "smallest")]
-pub(crate) fn optimize_with_zopfli(
-    mut best: CompressionResult,
-    encoding: EncodeOptions,
-) -> Result<CompressionResult> {
-    use std::num::NonZeroU64;
-
-    // Zopfli has no configurable history limit. Never offer its output as a
-    // candidate for a bounded stream, even if it happens to compress better.
-    if encoding.history_limit < 32768 {
-        return Ok(best);
-    }
-
-    // Zopfli recommends fewer iterations for large inputs. A finite stale-pass
-    // limit avoids spending time after the search has stopped improving.
-    let iteration_count = if best.filtered.len() >= 1024 * 1024 {
-        5
-    } else {
-        10
-    };
-    let options = zopfli::Options {
-        iteration_count: NonZeroU64::new(iteration_count).expect("iteration count is positive"),
-        iterations_without_improvement: NonZeroU64::new(5).expect("improvement limit is positive"),
-        ..zopfli::Options::default()
-    };
-    let mut zopfli = Vec::new();
-    zopfli::compress(
-        options,
-        zopfli::Format::Deflate,
-        best.filtered.as_slice(),
-        &mut zopfli,
-    )
-    .map_err(|error| {
-        Error::new(
-            ErrorKind::InvalidCompression,
-            format!("Zopfli compression failed: {error}"),
-        )
-    })?;
-    if zopfli.len() < best.compressed.len() {
-        best.compressed = zopfli;
-    }
-    Ok(best)
-}
-
-#[cfg(not(feature = "smallest"))]
-pub(crate) fn optimize_with_zopfli(
-    _best: CompressionResult,
-    _encoding: EncodeOptions,
-) -> Result<CompressionResult> {
-    Err(Error::new(
-        ErrorKind::InvalidInput,
-        "smallest-output compression requires the `smallest` Cargo feature",
-    ))
 }
 
 fn search_candidate(
